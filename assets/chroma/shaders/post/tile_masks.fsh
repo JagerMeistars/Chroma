@@ -45,11 +45,10 @@ void main() {
     vec2 tileMin = floor(texCoord * CHROMA_TILE_GRID) / CHROMA_TILE_GRID - pixelMargin;
     vec2 tileMax = tileMin + 1.0 / CHROMA_TILE_GRID + 2.0 * pixelMargin;
     uint mask = 0u;
-    for (int k = 0; k < CHROMA_LAMPS; k++) {
+    for (int k = bank * 32; k < min((bank + 1) * 32, CHROMA_LAMPS); k++) {
         if (!chromaMdLampOn(MatDecSampler, k)) continue;
         float radius = max(chromaMdLampRadiusOf(MatDecSampler, k) * CHROMA_RADIUS_GAIN, 0.001);
-        if (lightTouchesTile(chromaMdLampEyeOf(MatDecSampler, k), radius, tileMin, tileMax)
-                && (k / 32 == bank))
+        if (lightTouchesTile(chromaMdLampEyeOf(MatDecSampler, k), radius, tileMin, tileMax))
             mask |= 1u << uint(k & 31);
     }
     fragColor = encodeMask(mask);

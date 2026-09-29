@@ -1,5 +1,9 @@
 # Provenance / Происхождение
 
+The shadow branch studied [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) as a reference for persistent voxel observations. Its shadow code was not copied; Chroma's source-distance atlas, filtering and 26.3 world-coordinate transport are implemented here. The small hand-depth hook adapts Minecraft 26.3's own `integrate_depth.fsh`.
+
+В ветке теней [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) использовался как пример накопления наблюдений в вокселях. Код его теней не копировался: карты расстояний от источников, фильтрация и передача координат мира 26.3 реализованы здесь. Небольшая правка глубины рук основана на штатном `integrate_depth.fsh` Minecraft 26.3.
+
 The starting point was Chroma's lighting effect and marker assets in the supplied **RPDREVO** resource pack for Minecraft Java Edition 26.3. The first standalone edition removed unrelated map resources and the shadow implementation. This automatic-source edition rewrites marker geometry and data transport, adds GPU catalogue counting and compaction, and rewrites the lighting path around tile masks. It preserves the source effect's visual approach, the five light shapes and the legacy model identifiers; it is not an unchanged extraction of the original shaders.
 
 No separate Chroma author credit or Chroma license was found in the supplied resource pack. This document records the source; it does not grant a new license or establish redistribution rights. Existing authors retain their rights. Minecraft is a product of Mojang Studios; this is an unofficial resource pack.

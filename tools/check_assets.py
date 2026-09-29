@@ -38,6 +38,7 @@ def main():
     parser.add_argument('--source-manifest',type=Path)
     parser.add_argument('--report',type=Path)
     args=parser.parse_args();root=args.root.resolve()
+    shadow_build=(root/'assets/chroma/shaders/include/shadow_config.glsl').is_file()
     jar=zipfile.ZipFile(args.client_jar);vanilla=set(jar.namelist());errors=[];references=0
     def resource(identifier,folder,ext):
         nonlocal references
@@ -63,7 +64,9 @@ def main():
                 if '/items/' in path.as_posix() or '/models/' in path.as_posix():model_refs(data)
             if path.suffix in ('.fsh','.vsh','.glsl','.json'):
                 source=path.read_text(encoding='utf-8')
-                if re.search(r'shadow|voxel|noshadow|objmc|shader_selector|dcs:|MATDEC_PREV|MatPrevSampler|CHROMA_PERF|DEBUG_MODE',source,re.I):
+                removed = r'objmc|shader_selector|dcs:|MATDEC_PREV|MatPrevSampler|CHROMA_PERF|DEBUG_MODE'
+                if not shadow_build: removed += r'|shadow|voxel|noshadow'
+                if re.search(removed,source,re.I):
                     errors.append(f'Removed subsystem remains: {path.relative_to(root)}')
                 for inc in re.findall(r'#include\s*<([^>]+)>',source):resource(inc,'shaders/include','')
         except (ValueError,KeyError,TypeError) as e:errors.append(f'{path.relative_to(root)}: {e}')
@@ -71,6 +74,7 @@ def main():
     if namespaces!={'chroma','minecraft'}:errors.append(f'Unexpected asset namespaces: {namespaces}')
     mcfiles={p.relative_to(root/'assets/minecraft').as_posix() for p in (root/'assets/minecraft').rglob('*') if p.is_file()}
     allowed={'post_effect/end_of_frame.json','atlases/items.json'}|{f'shaders/core/{name}.{stage}' for name in ('item','entity') for stage in ('vsh','fsh')}
+    if shadow_build: allowed.add('shaders/core/integrate_depth.fsh')
     if mcfiles!=allowed:errors.append(f'Unexpected Minecraft overrides: {mcfiles^allowed}')
     chain=json.loads((root/'assets/minecraft/post_effect/end_of_frame.json').read_text(encoding='utf-8'))
     targets=chain['targets'];available={'minecraft:main'};dimensions={}
@@ -95,8 +99,13 @@ def main():
                 if target==output:errors.append(f'Read/write feedback in pass {index}: {target}')
                 # This renderer is entirely frame-local, even if debug readback
                 # makes a target persistent. Never read an earlier frame by accident.
-                if target not in available:errors.append(f'Target read before this frame writes it: {target}')
-            elif 'location' in inp:resource(inp['location'],'textures','.png')
+                history = shadow_build and target in ('voxel_history','voxel_meta_history','shadow_map_history','shadow_meta_history') and targets[target].get('persistent')
+                if target not in available and not history:errors.append(f'Target read before this frame writes it: {target}')
+            elif 'location' in inp:
+                # Exact 26.3 PostChain expands these to textures/effect/<id>.png.
+                ns,name=inp['location'].split(':',1)
+                rel=f'assets/{ns}/textures/effect/{name}.png';references+=1
+                if not (root/rel).is_file() and rel not in vanilla:errors.append(f'Missing resource: {rel}')
         available.add(output)
     for target,expected in {'catalog':[2048,1],'counts':[64,1],'indices':[128,1],'colorcache':[128,1],'matdec':[2176,1],'tile_masks':[512,72],'swap':'framebuffer'}.items():
         if dimensions.get(target)!=expected:errors.append(f'Transport target dimension mismatch: {target}={dimensions.get(target)}, expected {expected}')

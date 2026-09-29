@@ -10,6 +10,7 @@ layout(location = 2) flat out mat4 cameraInvProj;
 layout(location = 6) flat out mat4 cameraProj;
 layout(location = 10) flat out vec3 cameraDown;
 layout(location = 11) flat out int autoLastAddress;
+layout(location = 12) flat out mat3 cameraInvRot;
 
 void main() {
     autoLastAddress = int(chromaMdBits(MatDecSampler, 43));
@@ -20,10 +21,12 @@ void main() {
     cameraInvProj = mat4(0.0);
     cameraProj = mat4(0.0);
     cameraDown = vec3(0.0, -1.0, 0.0);
+    cameraInvRot = mat3(1.0);
     if (cameraValid != 0) {
         cameraInvProj = chromaMdInvProj(MatDecSampler, 0);
         for (int i = 0; i < 16; i++)
             cameraProj[i / 4][i % 4] = chromaMdFloat(MatDecSampler, 1 + i);
         cameraDown = normalize(chromaMdRot(MatDecSampler, 0) * vec3(0.0, -1.0, 0.0));
+        cameraInvRot = transpose(chromaMdRot(MatDecSampler, 0));
     }
 }

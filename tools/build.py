@@ -17,6 +17,9 @@ def pack_files():
 
 
 def main():
+    if (ROOT / 'assets/chroma/shaders/include/shadow_config.glsl').is_file():
+        from build_shadows import main as build_shadow
+        return build_shadow()
     out = ROOT / 'dist' / 'Chroma-Auto-26.3.zip'
     out.parent.mkdir(exist_ok=True)
     files = pack_files()

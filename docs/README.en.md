@@ -1,12 +1,12 @@
 # Chroma — automatic lights
 
-Chroma adds coloured point lights, three spotlight widths, downward hemispheres, soft glow and blue-grey distance fog to **Minecraft Java 26.3**. It uses a vanilla resource pack, format **97.1**, with no required mod or datapack. It has no light shadows. Distance fog remains visible even when no light sources are present.
+Chroma adds coloured point lights, three spotlight widths, downward hemispheres, soft glow and blue-grey distance fog to **Minecraft Java 26.3**. It uses a vanilla resource pack, format **97.1**, with no required mod or datapack. **Auto** is the main shadow-free edition; this branch also provides **Shadows Dynamic** and **Shadows Static**. The same commands and 128-source budget apply to all three. Read the [shadow guide](SHADOWS.md) before choosing a shadow edition. Distance fog remains visible without light sources.
 
 ## Install and create a light
 
-1. Put `Chroma-Auto-26.3.zip` or the `Chroma` folder in `minecraft/resourcepacks`. `pack.mcmeta` and `assets` must be at the archive/folder root.
-2. Enable Chroma in **Options → Resource Packs**. Use one copy, and initially test it on its own. Other packs that override core shaders or `minecraft:post_effect/end_of_frame.json` require a deliberate merge. RPDREVO is not required.
-3. After replacing pack files, press **F3+T**. The pack uses 26.3's end-of-frame hook; the old 26.2 Fabulous installation procedure does not apply.
+1. Put `Chroma-Auto-26.3.zip`, `Chroma-Shadows-Dynamic-26.3.zip`, or the world-specific `Chroma-Shadows-Static-objCubed-26.3.zip` in `minecraft/resourcepacks`. An unpacked folder also works; `pack.mcmeta` and `assets` must be at its root.
+2. Enable **only one Chroma edition**, at highest priority, in **Options → Resource Packs**. Initially test it on its own. Other packs that override core shaders or `minecraft:post_effect/end_of_frame.json` require a deliberate merge. RPDREVO is not required.
+3. After replacing pack files, press **F3+T**. For shadow editions, also reload after changing worlds or dimensions to reset the cache. Static must match the exported world/dimension. The old 26.2 Fabulous installation procedure does not apply.
 4. In a world where you have command permission, create a source above a pale floor:
 
 ```mcfunction
@@ -75,15 +75,17 @@ A test datapack is installed in the `objCubed` save at `datapacks/chroma_test_12
 
 The marker's texture identifies its shape; tint and transformed geometry provide the other light parameters. The renderer takes the marker's current-frame vertex address, writes its data into a sparse GPU catalogue, counts valid entries and compacts them into a working list of up to 128 sources. Users do not supply addresses. This is not random hashing, and unrelated colours do not compete for a shared hand-assigned slot.
 
-A `128 × 72` grid stores which sources can affect each screen tile. Each tile uses four 32-bit masks to cover the 128-source list. The final pass reads only those sources and combines surface light and glow in one loop. Camera matrices are decoded at the screen-triangle vertices rather than again at every pixel. Each frame uses current marker and camera data, without a persistent source cache.
+A `128 × 72` grid stores which sources can affect each screen tile. Each tile uses four 32-bit masks to cover the 128-source list. The final pass reads only those sources and combines surface light and glow in one loop. Camera matrices are decoded at the screen-triangle vertices rather than again at every pixel. Light parameters are collected afresh each frame. Shadow editions additionally cache world geometry and source-centred distance maps; see [how shadows work](SHADOWS.md).
 
 ## Limits and troubleshooting
 
 - **Capacity is 128 simultaneously rendered sources.** The names can be reused freely, but the working list is finite. Above 128, some sources are omitted; do not rely on a particular selection order.
 - **Sources must be rendered.** Chunk loading, server entity tracking, view distance and renderer culling still apply. The example's zero display width/height and increased view range help, but do not make unloaded entities visible to shaders.
 - **No light:** test the exact first command near a pale, textured floor with only Chroma enabled. Keep the marker's X/Y scales positive. A paper item in inventory/hand is the intended fallback, not a placed source.
-- **Lighting passes through walls.** There is no source-to-surface occlusion or shadow test. This is visual lighting; block-light levels, mob spawning and other mechanics remain unchanged.
-- **Performance depends on overlap and resolution.** Widely separated sources benefit most from tile culling. If all 128 affect the same pixels, those pixels still evaluate all 128. See [validation](VALIDATION.md) for actual tested conditions, not a universal FPS promise.
+- **Occlusion depends on the edition.** Auto passes through walls. Dynamic can shadow cached, previously observed geometry inside its moving 64-block window; unseen geometry or unseen edits are unknown. Removing every lamp does not clear its geometry cache; **F3+T** does. Static shadows use only exported geometry and bounds, including off-camera blockers; re-export after block changes. See [shadow limits](SHADOWS.md). Block-light levels, mob spawning and other mechanics remain unchanged.
+- **Shadows affect direct surface light.** The weak existing analytic glow is unshadowed and can bleed through blockers. To disable it, set `VOL_STRENGTH` to `0.0` in `assets/chroma/shaders/post/shade.fsh`, then rebuild/reload.
+- **Hands and HUD keep vanilla lighting.** In shadow editions, the actual pixels covered by first-person hands/held items and the separate 3D-HUD pass are excluded from Chroma shading and voxel observations. They do not become world blockers. The surrounding world remains eligible; there is no fixed screen rectangle excluded. The ordinary 2D GUI stays unchanged.
+- **Performance depends on overlap and resolution.** Widely separated sources benefit most from tile culling. If all 128 affect the same pixels, those pixels still evaluate all 128; shadows add map updates and filtering. See [Auto validation](VALIDATION.md) and the separate [shadow results](SHADOW_VALIDATION.md) for measured conditions; neither is a universal FPS promise.
 - **Transparent surfaces and depth edges** may show screen-space approximations. Fog can be reduced with `FOG_DENSITY`/`FOG_SKY`, and glow with `VOL_STRENGTH`, in `assets/chroma/shaders/post/shade.fsh`.
 - **Transport has a finite address space.** The sparse catalogue supports up to 65,536 raw vertex addresses, further bounded by the rendered image size. This is an internal transport bound, not a number to assign to lamps. Very small render sizes or unusually heavy visible model geometry can exceed it. The old 576-pixel-height requirement is gone; a 320 × 240 frame has approximately 6,240 raw addresses. Reduce visible model complexity or increase render resolution if this bound is reached.
 - **Reload errors/conflicts:** inspect `minecraft/logs/latest.log`; test Chroma alone first. Render-altering mod compatibility requires separate verification.

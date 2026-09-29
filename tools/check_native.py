@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prism', type=Path, default=Path(os.environ['APPDATA']) / 'PrismLauncher')
+    parser.add_argument('--pack', type=Path, help='Validate an existing variant ZIP instead of the source assets')
     args = parser.parse_args()
     prism = args.prism
     java = prism / 'java/java-runtime-epsilon/bin'
@@ -46,12 +47,13 @@ def main():
         gpu_libraries.append(prism / 'libraries/org/lwjgl' / artifact / '3.4.1' / (artifact + '-3.4.1.jar'))
     gpu_cp = ';'.join(map(str, gpu_libraries))
     subprocess.run([str(java / 'javac.exe'), '-encoding', 'UTF-8', '-cp', gpu_cp, '-d', str(classes), str(ROOT / 'tools/CheckDriver.java')], check=True)
-    archive = report / 'candidate.zip'
-    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
-        z.write(ROOT / 'pack.mcmeta', 'pack.mcmeta')
-        for p in sorted((ROOT / 'assets').rglob('*')):
-            if p.is_file():
-                z.write(p, p.relative_to(ROOT).as_posix())
+    archive = args.pack.resolve() if args.pack else report / 'candidate.zip'
+    if not args.pack:
+        with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.write(ROOT / 'pack.mcmeta', 'pack.mcmeta')
+            for p in sorted((ROOT / 'assets').rglob('*')):
+                if p.is_file():
+                    z.write(p, p.relative_to(ROOT).as_posix())
     stages = report / 'roundtrip'
     # Remove only this check's prior generated shader files to avoid stale success.
     if stages.exists():

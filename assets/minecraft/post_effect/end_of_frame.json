@@ -30,7 +30,57 @@
       "height": 72,
       "persistent": true
     },
-    "swap": {}
+    "swap": {},
+    "voxel": {
+      "width": 4096,
+      "height": 256,
+      "persistent": true
+    },
+    "voxel_history": {
+      "width": 4096,
+      "height": 256,
+      "persistent": true
+    },
+    "voxel_meta": {
+      "width": 8,
+      "height": 1,
+      "persistent": true
+    },
+    "voxel_meta_history": {
+      "width": 8,
+      "height": 1,
+      "persistent": true
+    },
+    "voxel_lod1": {
+      "width": 1024,
+      "height": 128,
+      "persistent": true
+    },
+    "voxel_lod2": {
+      "width": 256,
+      "height": 64,
+      "persistent": true
+    },
+    "shadow_map": {
+      "width": 2048,
+      "height": 1024,
+      "persistent": true
+    },
+    "shadow_map_history": {
+      "width": 2048,
+      "height": 1024,
+      "persistent": true
+    },
+    "shadow_meta": {
+      "width": 1024,
+      "height": 1,
+      "persistent": true
+    },
+    "shadow_meta_history": {
+      "width": 1024,
+      "height": 1,
+      "persistent": true
+    }
   },
   "passes": [
     {
@@ -120,6 +170,121 @@
       "output": "tile_masks"
     },
     {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/voxel_update",
+      "inputs": [
+        {
+          "sampler_name": "Prev",
+          "target": "voxel_history"
+        },
+        {
+          "sampler_name": "Meta",
+          "target": "voxel_meta_history"
+        },
+        {
+          "sampler_name": "InDepth",
+          "target": "minecraft:main",
+          "use_depth_buffer": true
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Catalog",
+          "target": "catalog"
+        }
+      ],
+      "output": "voxel"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/voxel_meta",
+      "inputs": [
+        {
+          "sampler_name": "Meta",
+          "target": "voxel_meta_history"
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        }
+      ],
+      "output": "voxel_meta"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/voxel_lod",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "voxel"
+        }
+      ],
+      "output": "voxel_lod1"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/voxel_lod",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "voxel_lod1"
+        }
+      ],
+      "output": "voxel_lod2"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/shadow_meta",
+      "inputs": [
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        }
+      ],
+      "output": "shadow_meta"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/shadow_map",
+      "inputs": [
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "PreviousShadow",
+          "target": "shadow_map_history"
+        },
+        {
+          "sampler_name": "CurrentShadowMeta",
+          "target": "shadow_meta"
+        },
+        {
+          "sampler_name": "PreviousShadowMeta",
+          "target": "shadow_meta_history"
+        },
+        {
+          "sampler_name": "VoxelMeta",
+          "target": "voxel_meta"
+        },
+        {
+          "sampler_name": "Voxel",
+          "target": "voxel"
+        },
+        {
+          "sampler_name": "VoxelLod1",
+          "target": "voxel_lod1"
+        },
+        {
+          "sampler_name": "VoxelLod2",
+          "target": "voxel_lod2"
+        }
+      ],
+      "output": "shadow_map"
+    },
+    {
       "vertex_shader": "chroma:post/shade",
       "fragment_shader": "chroma:post/shade",
       "inputs": [
@@ -147,9 +312,57 @@
         {
           "sampler_name": "Catalog",
           "target": "catalog"
+        },
+        {
+          "sampler_name": "Shadow",
+          "target": "shadow_map"
         }
       ],
       "output": "swap"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/copy",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "voxel"
+        }
+      ],
+      "output": "voxel_history"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/copy",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "voxel_meta"
+        }
+      ],
+      "output": "voxel_meta_history"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/copy",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "shadow_map"
+        }
+      ],
+      "output": "shadow_map_history"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/copy",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "shadow_meta"
+        }
+      ],
+      "output": "shadow_meta_history"
     },
     {
       "vertex_shader": "minecraft:core/screenquad",

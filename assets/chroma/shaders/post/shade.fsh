@@ -35,6 +35,7 @@
 #include <minecraft:globals.glsl>
 #include <chroma:lighting.glsl>
 #include <chroma:auto_read.glsl>
+#include <chroma:shadow_filter.glsl>
 
 uniform sampler2D InSampler;
 uniform sampler2D InDepthSampler;
@@ -52,6 +53,7 @@ layout(location = 1) flat in int cameraValid;
 layout(location = 2) flat in mat4 cameraInvProj;
 layout(location = 10) flat in vec3 cameraDown;
 layout(location = 11) flat in int autoLastAddress;
+layout(location = 12) flat in mat3 cameraInvRot;
 layout(location = 0) out vec4 fragColor;
 
 vec3 aces(vec3 x) {
@@ -85,6 +87,12 @@ void main() {
         suv.y = (float(cleanY) + 0.5) / float(frameSize.y);
     }
     float d = chromaDepth(suv);
+    // The hand/3D-HUD integration hook marks only covered pixels. Preserve their
+    // vanilla color instead of interpreting their different projection as world.
+    if (d >= 0.999999) {
+        fragColor = vec4(albedo, 1.0);
+        return;
+    }
     bool isSky = d <= 0.000001;
     float fogDist = isSky ? 1.0e4 : 0.05 / max(d, 1.0e-7);
     float fogF = (1.0 - exp(-fogDist * FOG_DENSITY)) * (isSky ? FOG_SKY : 1.0);
@@ -136,6 +144,11 @@ void main() {
                    : fragPos / max(tMax, 1e-4);
     vec3 radiance = vec3(0.0);
     vec3 vol = vec3(0.0);
+    float shadowDebug = 1.0;
+    vec3 worldReceiver = cameraInvRot * fragPos;
+    vec3 worldNormal = cameraInvRot * normal;
+    vec4 previousShadowSource = vec4(0.0);
+    float previousVisibility = 1.0;
     while ((mask0 | mask1 | mask2 | mask3) != 0u) {
         int bank = mask0 != 0u ? 0 : (mask1 != 0u ? 1 : (mask2 != 0u ? 2 : 3));
         uint activeMask = bank == 0 ? mask0 : (bank == 1 ? mask1 : (bank == 2 ? mask2 : mask3));
@@ -166,6 +179,19 @@ void main() {
                     fall *= smoothstep(0.0, DOME_EDGE, dot(normalize(-toL), cameraDown));
                 }
                 surfaceWeight = LIGHT_STRENGTH * diff * fall;
+                if (surfaceWeight > 0.0001) {
+                    // Colour and cone shape do not change radial occlusion.
+                    // Reuse an exact colocated source; distinct positions stay independent.
+                    vec4 shadowSource = vec4(lPos, lRad);
+                    if (any(notEqual(shadowSource, previousShadowSource))) {
+                        previousVisibility = chromaShadow(k, worldReceiver,
+                            worldNormal, cameraInvRot * lPos, lRad);
+                        previousShadowSource = shadowSource;
+                    }
+                    float visibility = previousVisibility;
+                    surfaceWeight *= visibility;
+                    shadowDebug = min(shadowDebug, visibility);
+                }
             }
         }
         float glowWeight = 0.0;
@@ -205,4 +231,7 @@ void main() {
     outc = mix(outc, FOG_COLOR, fogF);
     outc += vol;
     fragColor = vec4(outc, 1.0);
+#if CHROMA_SHADOW_DEBUG
+    fragColor = vec4(vec3(shadowDebug), 1.0);
+#endif
 }

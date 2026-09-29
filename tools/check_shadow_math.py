@@ -1,0 +1,311 @@
+"""CPU shadow reference: hierarchy, camera invariance, and area-light penumbra.
+
+This is a geometry check, not a live GLSL/performance test. Shader expressions
+that its port depends on are checked so a changed tracer cannot silently pass.
+"""
+from pathlib import Path
+import math
+import random
+import re
+import struct
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = (ROOT / 'assets/chroma/shaders/include/shadows.glsl').read_text()
+CONFIG = (ROOT / 'assets/chroma/shaders/include/shadow_config.glsl').read_text()
+FILTER = (ROOT / 'assets/chroma/shaders/include/shadow_filter.glsl').read_text()
+
+
+def setting(name):
+    return float(re.search(rf'^#define {name}\s+([0-9.]+)', CONFIG, re.M)[1])
+
+
+def f32(x):
+    return struct.unpack('f', struct.pack('f', x))[0]
+
+
+def add(a, b): return tuple(x + y for x, y in zip(a, b))
+def sub(a, b): return tuple(x - y for x, y in zip(a, b))
+def mul(a, t): return tuple(x * t for x in a)
+def dot(a, b): return sum(x * y for x, y in zip(a, b))
+def unit(a): return mul(a, 1 / math.sqrt(dot(a, a)))
+def cross(a, b):
+    return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+
+
+def interval(start, direction, low, high):
+    near, far = -math.inf, math.inf
+    for p, d, a, b in zip(start, direction, low, high):
+        if abs(d) < 1e-12:
+            if p < a or p >= b: return math.inf, -math.inf
+        else:
+            x, y = (a-p)/d, (b-p)/d
+            near, far = max(near, min(x, y)), min(far, max(x, y))
+    return near, far
+
+
+def reference(start, end, boxes):
+    for low, high in boxes:
+        a, b = interval(start, sub(end, start), low, high)
+        if max(a, 0.0) < min(b, 1.0-1e-5): return True
+    return False
+
+
+def trace(start_world, end_world, boxes, camera, origin, steps=192):
+    # Integer base + local float coordinates mirrors the shader's precision path.
+    block = tuple(math.floor(x) for x in camera)
+    offset = sub(block, camera)
+    from_camera = tuple(f32(x) for x in sub(start_world, camera))
+    to_camera = tuple(f32(x) for x in sub(end_world, camera))
+    start = tuple(f32(4*b-o + f32(f32(p-c)*4))
+                  for b,o,p,c in zip(block, origin, from_camera, offset))
+    segment = tuple(f32(f32(b-a)*4) for a,b in zip(from_camera, to_camera))
+    length = math.sqrt(dot(segment, segment))
+    direction = unit(segment)
+    near, far = interval(start, direction, (0,0,0), (256,256,256))
+    t, end = max(near, 0.0)+.0001, min(far, length-.001)
+    for _ in range(steps):
+        if t >= end: return False, False
+        point = add(start, mul(direction, t))
+        cell = tuple(o+math.floor(p) for o,p in zip(origin, point))
+        for size in (4, 2, 1):
+            low = tuple((v//size)*size for v in cell)
+            high = tuple(v+size for v in low)
+            occupied = any(all(a<d and c<b for a,b,c,d in zip(low,high,lo,hi))
+                           for lo,hi in boxes)
+            if not occupied:
+                crossings = [((math.floor(p/size)+(d>=0))*size-p)/d
+                             for p,d in zip(point,direction) if abs(d)>=1e-7]
+                t += max(min(crossings), 0.0)+.0001
+                break
+        else: return True, False
+    # Report separately: callers must not confuse traversal exhaustion with clear.
+    return None, True
+
+
+def samples(receiver, light, rays, radius):
+    axis = unit(sub(light, receiver))
+    tangent = unit(cross(axis, (0,1,0) if abs(axis[1])<.9 else (1,0,0)))
+    bitangent = cross(axis, tangent)
+    for ray in range(rays):
+        r = radius*math.sqrt((ray+.5)/rays)
+        angle = ray*2.39996323
+        yield add(light, add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle))))
+
+
+def oct_uv(direction):
+    x,y,z = mul(direction,1/sum(abs(x) for x in direction))
+    if z<0: x,y = (1-abs(y))*(-1 if x<0 else 1), (1-abs(x))*(-1 if y<0 else 1)
+    return ((x+1)*.5,(y+1)*.5)
+
+
+def oct_seam(p,n):
+    x,y = p
+    if x<0: x,y = -x-1,n-1-y
+    if x>=n: x,y = 2*n-1-x,n-1-y
+    if y<0: y,x = -y-1,n-1-x
+    if y>=n: y,x = 2*n-1-y,n-1-x
+    return x,y
+
+
+def oct_ray(p,n):
+    x,y = ((v+.5)/n*2-1 for v in oct_seam(p,n))
+    z = 1-abs(x)-abs(y)
+    if z<0: x,y = (1-abs(y))*(-1 if x<0 else 1), (1-abs(x))*(-1 if y<0 else 1)
+    return unit((x,y,z))
+
+
+def receiver_depth(ray,normal,plane):
+    d = dot(ray,normal)
+    return plane/d if abs(d)>=.0001 and d*plane>0 else 1e6
+
+
+def analytic_depth(ray,light,point,normal,boxes):
+    # Independent ray/geometry intersection, with no UV, PCF or receiver bias.
+    numerator, denominator = dot(sub(point,light),normal),dot(ray,normal)
+    distance = numerator/denominator if numerator*denominator>0 else 1e6
+    for low,high in boxes:
+        near,far = interval(light,ray,low,high)
+        if max(near,0)<far: distance = min(distance,max(near,0))
+    return distance
+
+
+def pcf(ray,normal,plane,sampler,n,light_radius=1e6,old_reference=False):
+    uv = oct_uv(ray)
+    p = tuple(v*n-.5 for v in uv)
+    base = tuple(math.floor(v) for v in p)
+    w = tuple(v-b for v,b in zip(p,base))
+    visible = []
+    for x,y in ((0,0),(1,0),(0,1),(1,1)):
+        cell = (base[0]+x,base[1]+y)
+        sample_ray = ray if old_reference else oct_ray(cell,n)
+        reference_depth = receiver_depth(sample_ray,normal,plane)-.02
+        depth = sampler(oct_ray(cell,n))
+        visible.append(float(reference_depth>1e5 or depth>=light_radius-.001 or depth>=reference_depth))
+    a = visible[0]*(1-w[0])+visible[1]*w[0]
+    b = visible[2]*(1-w[0])+visible[3]*w[0]
+    return a*(1-w[1])+b*w[1]
+
+
+def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6):
+    sampler = lambda ray: min(analytic_depth(ray,light,receiver,normal,boxes),light_radius)
+    delta = sub(add(receiver,mul(normal,.035)),light)
+    distance,axis = math.sqrt(dot(delta,delta)),unit(delta)
+    center_pixel = tuple(int(v*n) for v in oct_uv(axis))
+    center_depth = sampler(oct_ray(center_pixel,n))
+    if center_depth <= .0001: return 0.0
+    tangent = unit(cross(axis,(0,1,0) if abs(axis[1])<.9 else (1,0,0)))
+    bitangent = cross(axis,tangent)
+    plane = dot(delta,normal)
+    blockers = []
+    search_angle = radius/max(.5,distance*.2)
+    for i in range(9):
+        angle = i*2.39996323
+        r = 0 if i==0 else math.sqrt(i/8)*search_angle
+        ray = unit(add(axis,add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle)))))
+        cell = tuple(int(v*n) for v in oct_uv(ray))
+        actual_ray = oct_ray(cell,n)
+        depth = sampler(actual_ray)
+        reference_depth = receiver_depth(actual_ray,normal,plane)-.02
+        if .0001<depth<light_radius-.001 and depth<reference_depth<1e5: blockers.append(depth)
+    if not blockers: return 1.0
+    blocker = sum(blockers)/len(blockers)
+    penumbra = radius*max(distance-blocker,0)/max(distance*blocker,.01)
+    filter_angle = max(penumbra,.7/n)
+    visible = 0.0
+    for i in range(16):
+        angle,r = i*2.39996323,math.sqrt((i+.5)/16)*filter_angle
+        ray = unit(add(axis,add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle)))))
+        visible += pcf(ray,normal,plane,sampler,n,light_radius)
+    return visible/16
+
+
+def check_octahedral(rng,radius):
+    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    source = re.sub(r'\s+','',re.sub(r'//[^\n]*','',FILTER))
+    assert source.count('chromaReceiverDepth(chromaShadowDirection(pixel),normal,plane)-0.02')==2, 'Both PCF and blocker search must compare the actual sampled texel ray'
+    assert 'reference>1e5||depth>=lightRadius-0.001?1.0:step(reference,depth)' in source
+    assert 'if(centerDepth<=0.0001)return0.0;' in source
+    assert 'depth>0.0001&&depth<lightRadius-0.001&&depth<reference&&reference<1e5' in source
+    for offset in ('base','base+ivec2(1,0)','base+ivec2(0,1)','base+ivec2(1,1)'):
+        assert f'chromaShadowCompare(lamp,{offset},normal,plane,lightRadius)' in source
+    # Fold every possible bilinear seam/corner neighbour inside its source tile.
+    for x in range(-1,n+1):
+        for y in (-1,0,n-1,n):
+            for p in ((x,y),(y,x)):
+                folded = oct_seam(p,n)
+                assert all(0<=v<n for v in folded)
+                uv = oct_uv(oct_ray(p,n))
+                assert max(abs(uv[i]-(folded[i]+.5)/n) for i in (0,1))<1e-12
+    # Opposite sides of each fold are geometric reflections across its seam.
+    for i in range(n):
+        for inner,outer,axis in (((0,i),(-1,i),1),((n-1,i),(n,i),1),
+                                 ((i,0),(i,-1),0),((i,n-1),(i,n),0)):
+            a,b = oct_ray(inner,n),oct_ray(outer,n)
+            expected = tuple(-v if j==axis else v for j,v in enumerate(a))
+            assert max(abs(x-y) for x,y in zip(expected,b))<1e-12
+    minimum_old = 1.0
+    tested = 0
+    for _ in range(150):
+        normal = unit(tuple(rng.uniform(-1,1) for _ in range(3)))
+        tangent = unit(cross(normal,(0,1,0) if abs(normal[1])<.9 else (1,0,0)))
+        receiver = tuple(rng.uniform(-5,5) for _ in range(3))
+        # Include oblique receiver planes to amplify the old comparison mismatch.
+        light = add(receiver,add(mul(normal,rng.uniform(.6,8)),mul(tangent,rng.uniform(-25,25))))
+        sampler = lambda ray: analytic_depth(ray,light,receiver,normal,[])
+        plane = dot(sub(add(receiver,mul(normal,.035)),light),normal)
+        ray = unit(sub(receiver,light))
+        assert pcf(ray,normal,plane,sampler,n)>1-1e-12
+        minimum_old = min(minimum_old,pcf(ray,normal,plane,sampler,n,old_reference=True))
+        assert pcss(receiver,normal,light,[],n,radius)>1-1e-12
+        # Plane/light geometry is unchanged under each camera translation.
+        for camera in ((0,0,0),(-40.25,12.5,17.75),(29_999_900.125,-11.25,-29_999_900.375)):
+            assert pcss(sub(receiver,camera),normal,sub(light,camera),[],n,radius)>1-1e-12
+            tested += 1
+        # Range-clamped texels signify no blocker, even if a neighbouring tap's
+        # receiver-plane intersection lies farther away than that range.
+        light_radius = math.sqrt(dot(sub(receiver,light),sub(receiver,light)))*1.001
+        assert pcss(receiver,normal,light,[],n,radius,light_radius)>1-1e-12
+        assert pcf(ray,normal,plane,lambda _: light_radius,n,light_radius)>1-1e-12
+    assert minimum_old<.8, 'Regression fixture must expose old continuous-ray PCF acne'
+    # An emitter buried in a block and a thin blocker only 5 mm away must not
+    # disappear from the search and become fully lit by its no-blocker shortcut.
+    assert pcss((0,0,4),(0,0,-1),(0,0,0),[((-1,-1,-1),(1,1,1))],n,radius,12) == 0.0
+    # A near-source filter reaches almost tangent directions, where a 128-square
+    # octahedral map has finite angular error; require dominant occlusion, not 1.0.
+    assert pcss((0,0,4),(0,0,-1),(0,0,0),[((-10,-10,.005),(10,10,.25))],n,radius,12) < .25
+    widths = []
+    box = [((-1,-10,-.25),(1,10,0))]
+    for separation in (2,6):
+        edge = (separation+4)/4
+        partial = []
+        for i in range(201):
+            x = edge-1+i*.01
+            value = pcss((x,0,separation),(0,0,-1),(0,0,-4),box,n,radius)
+            if .05<value<.95: partial.append(x)
+        assert partial
+        widths.append(max(partial)-min(partial))
+    assert widths[1]>widths[0]*1.5,widths
+    return tested,minimum_old,widths
+
+
+def main():
+    compact = re.sub(r'\s+', '', re.sub(r'//[^\n]*', '', SOURCE))
+    for expression in (
+        'CameraBlockPos*CHROMA_VOX_CELLS-origin',
+        '(from-CameraOffset)*float(CHROMA_VOX_CELLS)',
+        '(absoluteCell>>level)&(n-1)',
+        '((channel>>uint((cell.x&3)*2))&3u)>=2u',
+    ):
+        assert expression in compact, 'Update CPU reference for changed GLSL: '+expression
+    # Independent geometric area-light reference, not the production PCSS tap count.
+    rays, steps = 12, int(setting('CHROMA_SHADOW_STEPS'))
+    radius = setting('CHROMA_SOURCE_SIZE')
+    wall = [((-4,0,0),(4,32,1))]  # Quarter-cells: 2x8-block wall, quarter-block thick.
+    cameras = [(-12.25,5.5,15.125),(14.0625,18,6.375),(0.125,4.125,-8.25)]
+    rng = random.Random(263)
+    tested = 0
+    for _ in range(100):
+        receiver = (rng.uniform(-4,4),1.0,rng.uniform(1,8))
+        light = (rng.uniform(-2,2),3.0,-4.0)
+        target = next(samples(receiver,light,rays,radius))
+        expected = reference(mul(receiver,4),mul(target,4),wall)
+        for shift in (0,29_999_900,-29_999_900):
+            delta = (shift,0,shift)
+            shifted_wall = [(add(a,mul(delta,4)),add(b,mul(delta,4))) for a,b in wall]
+            for camera in cameras:
+                cam = add(camera,delta)
+                origin = tuple(4*math.floor(v)-128 for v in cam)
+                actual, exhausted = trace(add(receiver,delta),add(target,delta),shifted_wall,cam,origin,steps)
+                assert not exhausted and actual==expected, (actual,expected,cam,receiver,target)
+                tested += 1
+    widths = []
+    for distance in (2.0,6.0):
+        edge = (distance+4.0)/4.0
+        penumbra = []
+        for i in range(201):
+            receiver = (edge-1+i*.01,1.0,distance)
+            visibility = sum(not reference(mul(receiver,4),mul(s,4),wall)
+                             for s in samples(receiver,(0,3,-4),rays,radius))/rays
+            if 0<visibility<1: penumbra.append(receiver[0])
+        assert penumbra, 'Area source must produce partial visibility'
+        widths.append(max(penumbra)-min(penumbra))
+    assert widths[1]>widths[0]*1.7, widths
+    # Dense neighbouring occupancy defeats coarse skipping without hitting the ray.
+    crowded = [((0,1,0),(256,2,1)), ((250,0,0),(251,1,1))]
+    start,end = ((.125,.125,.125),(63.875,.125,.125))
+    bounded, exhausted = trace(start,end,crowded,(32,32,32),(0,0,0),steps)
+    assert reference(mul(start,4),mul(end,4),crowded)
+    if exhausted:
+        body = SOURCE[SOURCE.index('float chromaTraceDistance('):]
+        assert 'return min(t, lengthRay) * CHROMA_VOX_CELL;' in body
+    else: assert bounded
+    floors,old_acne,pcss_widths = check_octahedral(rng,radius)
+    print(f'PASS: {tested} ray/camera/large-coordinate comparisons; penumbra widths '
+          f'{widths[0]:.3f}->{widths[1]:.3f}; bounded traversal checked; '
+          f'octahedral seams and {floors} unoccluded planes stay lit '
+          f'(old PCF regression={old_acne:.3f}); PCSS penumbra '
+          f'{pcss_widths[0]:.3f}->{pcss_widths[1]:.3f}; buried/near-source blockers remain occluded')
+
+
+if __name__ == '__main__':
+    main()
