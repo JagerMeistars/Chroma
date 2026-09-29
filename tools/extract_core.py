@@ -1,7 +1,7 @@
-"""Rebuild the four Chroma core hooks from exact Minecraft 26.3 vanilla shaders.
+"""Rebuild Chroma core hooks from exact Minecraft 26.3 vanilla shaders.
 
 Generated files retain GLSL 330 and vanilla branches. This writes only item/entity
-vertex and fragment shaders; it never changes post effects or appearance settings.
+vertex/fragment shaders and the terrain header guard; no post effects are changed.
 """
 from argparse import ArgumentParser
 from pathlib import Path
@@ -158,6 +158,28 @@ def transform(vanilla: str, stage: str) -> str:
     return before + VARYINGS.format(direction='in') + FRAGMENT_HELPER + '\nvoid main() {\n' + FRAGMENT_BRANCH + after
 
 
+def transform_terrain(vanilla: str) -> str:
+    """Protect the camera packet from terrain closer than the header's depth."""
+    anchor = '#include <minecraft:globals.glsl>\n'
+    assert vanilla.count(anchor) == 1
+    shader = vanilla.replace(anchor, anchor + '#include <chroma:auto_transport.glsl>\n')
+    anchor = 'void main() {'
+    assert shader.count(anchor) == 1
+    return shader.replace(anchor, anchor + '''
+    // Near-plane terrain can be closer than the depth-arbitrated camera header.
+    // Reserve its 32 pixels in every terrain phase; shade restores their colour.
+    if (chromaAutoHeaderPixel(ivec2(gl_FragCoord.xy), ivec2(ScreenSize))) discard;
+''')
+
+
+def write_terrain(jar: ZipFile, output: Path) -> None:
+    rel = 'assets/minecraft/shaders/core/terrain.fsh'
+    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+    destination = output / rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(transform_terrain(vanilla), encoding='utf-8', newline='\n')
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument('--client-jar', type=Path, default=Path(os.environ['APPDATA']) / 'PrismLauncher/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar')
@@ -172,6 +194,8 @@ def main():
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(transform(vanilla, stage), encoding='utf-8', newline='\n')
                 print(rel)
+        write_terrain(jar, args.output)
+        print('assets/minecraft/shaders/core/terrain.fsh')
 
 
 if __name__ == '__main__':

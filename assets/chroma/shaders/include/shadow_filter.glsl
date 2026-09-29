@@ -4,6 +4,28 @@
 uniform sampler2D ShadowSampler;
 const int CHROMA_SHADOW_RES = 128;
 
+vec3 chromaShadowReceiver(vec3 receiver, vec3 normal) {
+#if CHROMA_SHADOW_PIXELATE
+    float subdivisions = float(max(CHROMA_SHADOW_PIXELS_PER_BLOCK, 1));
+    // CameraBlockPos is integral, so this small local coordinate has exactly
+    // the world grid's phase, including negative and very large world positions.
+    vec3 snapped = (floor((receiver - CameraOffset) * subdivisions) + 0.5)
+                 / subdivisions + CameraOffset;
+    vec3 a = abs(normal);
+    // Reconstructed normals carry float noise: give near-ties a stable priority.
+    int axis = a.x >= max(a.y, a.z) - 0.001 ? 0 : (a.y >= a.z - 0.001 ? 1 : 2);
+    if (a[axis] < 0.0001) return receiver;
+    vec3 delta = snapped - receiver;
+    delta[axis] = 0.0;
+    // Snap the two surface axes, then solve the third on the receiver plane.
+    // Slabs and sloped entity faces must not be pushed inside their own voxels.
+    delta[axis] = -dot(delta, normal) / normal[axis];
+    return receiver + delta;
+#else
+    return receiver;
+#endif
+}
+
 vec2 chromaShadowUV(vec3 direction) {
     direction /= abs(direction.x) + abs(direction.y) + abs(direction.z);
     vec2 uv = direction.xy;

@@ -13,10 +13,16 @@ def request(control: Path, text: str, timeout: float=40):
     staging.write_text(text,encoding='utf-8')
     staging.rename(path)
     deadline=time.monotonic()+timeout
-    while not done.exists():
+    while True:
+        if done.exists():
+            try:
+                return json.loads(done.read_text(encoding='utf-8'))
+            except json.JSONDecodeError:
+                # The Java probe creates the completion before finishing its
+                # write. Await that same reply; never resubmit a world command.
+                pass
         if time.monotonic()>deadline:raise TimeoutError(f'No completion for {path}; do not blindly repeat a mutating request')
         time.sleep(.1)
-    return json.loads(done.read_text(encoding='utf-8'))
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()

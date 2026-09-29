@@ -147,6 +147,7 @@ void main() {
     float shadowDebug = 1.0;
     vec3 worldReceiver = cameraInvRot * fragPos;
     vec3 worldNormal = cameraInvRot * normal;
+    worldReceiver = chromaShadowReceiver(worldReceiver, worldNormal);
     vec4 previousShadowSource = vec4(0.0);
     float previousVisibility = 1.0;
     while ((mask0 | mask1 | mask2 | mask3) != 0u) {

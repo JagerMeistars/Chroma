@@ -73,7 +73,7 @@ def main():
     namespaces={p.name for p in (root/'assets').iterdir()}
     if namespaces!={'chroma','minecraft'}:errors.append(f'Unexpected asset namespaces: {namespaces}')
     mcfiles={p.relative_to(root/'assets/minecraft').as_posix() for p in (root/'assets/minecraft').rglob('*') if p.is_file()}
-    allowed={'post_effect/end_of_frame.json','atlases/items.json'}|{f'shaders/core/{name}.{stage}' for name in ('item','entity') for stage in ('vsh','fsh')}
+    allowed={'post_effect/end_of_frame.json','atlases/items.json','shaders/core/terrain.fsh'}|{f'shaders/core/{name}.{stage}' for name in ('item','entity') for stage in ('vsh','fsh')}
     if shadow_build: allowed.add('shaders/core/integrate_depth.fsh')
     if mcfiles!=allowed:errors.append(f'Unexpected Minecraft overrides: {mcfiles^allowed}')
     chain=json.loads((root/'assets/minecraft/post_effect/end_of_frame.json').read_text(encoding='utf-8'))

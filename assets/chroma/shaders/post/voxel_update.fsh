@@ -35,6 +35,19 @@ vec3 eyeAt(ivec2 p, float depth, mat4 inverseProjection, ivec2 size) {
     vec4 eye = inverseProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
     return eye.xyz / eye.w;
 }
+uint clearObservedAir(ivec3 voxel, uint previous, mat4 projection,
+                      mat4 inverseProjection, mat3 rotation, ivec2 size) {
+    // Occupied cells get this cheap check every frame. A moving visible caster
+    // must not leave an eight-slice trail; hidden space still remains unknown.
+    vec3 centreEye = rotation * chromaVoxCentre(voxel);
+    ivec2 p;
+    if (!projectPixel(centreEye, projection, size, p)) return previous;
+    float d = texelFetch(InDepthSampler, p, 0).r;
+    if (d >= 0.999999) return previous;
+    if (d <= 0.000001) return 0u;
+    vec3 surface = eyeAt(p, d, inverseProjection, size);
+    return centreEye.z > surface.z + CHROMA_VOX_CELL ? 0u : previous;
+}
 uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection,
              mat3 rotation, ivec2 size) {
     vec3 centre = chromaVoxCentre(voxel);
@@ -52,24 +65,29 @@ uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection
     ivec2 px[4] = ivec2[4](p + ivec2(-1,0), p + ivec2(1,0),
                             p + ivec2(0,-1), p + ivec2(0,1));
     vec3 side[4];
+    float distanceZ[4];
     for (int i = 0; i < 4; ++i) {
-        if (!evidencePixel(px[i], size)) return previous;
-        float sd = texelFetch(InDepthSampler, px[i], 0).r;
-        if (sd >= 0.999999) return previous;
-        if (sd <= 0.000001) return previous;
-        side[i] = eyeAt(px[i], sd, inverseProjection, size);
+        side[i] = surface;
+        distanceZ[i] = 1.0e20;
+        if (evidencePixel(px[i], size)) {
+            float sd = texelFetch(InDepthSampler, px[i], 0).r;
+            if (sd > 0.000001 && sd < 0.999999) {
+                side[i] = eyeAt(px[i], sd, inverseProjection, size);
+                distanceZ[i] = abs(side[i].z - surface.z);
+            }
+        }
     }
-    vec3 dx = abs(side[1].z-surface.z) < abs(side[0].z-surface.z)
-        ? side[1]-surface : surface-side[0];
-    vec3 dy = abs(side[3].z-surface.z) < abs(side[2].z-surface.z)
-        ? side[3]-surface : surface-side[2];
+    int horizontal = distanceZ[1] < distanceZ[0] ? 1 : 0;
+    int vertical = distanceZ[3] < distanceZ[2] ? 3 : 2;
+    if (distanceZ[horizontal] > 1.0 || distanceZ[vertical] > 1.0) return previous;
+    vec3 dx = horizontal == 1 ? side[1]-surface : surface-side[0];
+    vec3 dy = vertical == 3 ? side[3]-surface : surface-side[2];
     vec3 crossNormal = cross(dx, dy);
     if (dot(crossNormal, crossNormal) < 1e-16) return previous;
     vec3 normalEye = normalize(crossNormal);
     if (dot(normalEye, surface) > 0.0) normalEye = -normalEye;
-    // Reject silhouettes and creases; steep but planar faces remain eligible.
-    for (int i = 0; i < 4; ++i)
-        if (abs(dot(side[i] - surface, normalEye)) > CHROMA_VOX_CELL * 0.5) return previous;
+    // Only the selected local triangle defines this surface. Its unused
+    // neighbors may be background at a fence, slab, stair, or entity silhouette.
     vec3 normal = normalize(transpose(rotation) * normalEye);
     int axis = abs(normal.x) > abs(normal.y) ? 0 : 1;
     if (abs(normal.z) > abs(normal[axis])) axis = 2;
@@ -77,10 +95,24 @@ uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection
         float s = sign(normal[axis]);
         normal = vec3(0.0); normal[axis] = s;
     }
-    // Probe the cell's outward face, not its centre: grazing views otherwise
-    // miss the interior surface layer. Normal-directed bias never slides past
-    // a block edge along the camera ray.
-    vec3 probe = centre + normal * (CHROMA_VOX_CELL * 0.5);
+    // Project onto the observed surface plane. A slab, fence rail or moving
+    // entity face can lie inside this cell, not at its outward quarter-grid face.
+    // Reject planes outside the cell's normal extent before probing them.
+    float planeOffset = dot(transpose(rotation) * surface - centre, normal);
+    float cellExtent = CHROMA_VOX_CELL * 0.5 * dot(abs(normal), vec3(1.0));
+    if (previous > 0u && planeOffset <= -cellExtent + 0.001) {
+        // A removed caster can leave a cell touching the floor: the conservative
+        // eye-depth margin misses it, and a probe on the floor has zero gap.
+        // Clear only against a locally confirmed plane, not a silhouette pair.
+        bool clearPlane = true;
+        for (int i = 0; i < 4; ++i)
+            if (distanceZ[i] > 1.0 || abs(dot(side[i] - surface, normalEye)) > 0.01)
+                clearPlane = false;
+        if (clearPlane) return 0u;
+    }
+    float planeLimit = cellExtent + 0.02;
+    if (abs(planeOffset) > planeLimit) return previous;
+    vec3 probe = centre + normal * planeOffset;
     vec3 probeEye = rotation * probe;
     ivec2 q;
     if (!projectPixel(probeEye, projection, size, q)) return previous;
@@ -89,9 +121,11 @@ uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection
     if (qd <= 0.000001) return previous > 0u ? previous - 1u : 0u;
     vec3 hitEye = eyeAt(q, qd, inverseProjection, size);
     vec3 hit = transpose(rotation) * hitEye;
-    if (length(hit - probe) <= 0.15 && abs(dot(hit - centre, normal)) <= 0.15) {
+    if (length(hit - probe) <= 0.15 && abs(dot(hit - centre, normal)) <= planeLimit) {
         ivec3 hitCell = chromaVoxOf(hit - normal * 0.02);
-        if (hitCell[axis] == voxel[axis]) return 3u;
+        // A depth sample belongs to one exact quarter-cell. Checking all axes
+        // avoids expanding a thin silhouette sideways into adjacent empty cells.
+        if (all(equal(hitCell, voxel))) return 3u;
     }
     if (probeEye.z > hitEye.z + 0.10) return previous > 0u ? previous - 1u : 0u;
     return previous;
@@ -112,7 +146,8 @@ void main() {
     ivec3 first = origin + ((wrapped - origin) & (CHROMA_VOX_N - 1));
     bool updateSlice = (first.y % CHROMA_VOX_UPDATE_PHASES + CHROMA_VOX_UPDATE_PHASES)
         % CHROMA_VOX_UPDATE_PHASES == int(frame % uint(CHROMA_VOX_UPDATE_PHASES));
-    if (valid && !updateSlice && all(equal(origin, previousOrigin))) {
+    if (valid && !updateSlice && all(equal(origin, previousOrigin))
+            && (oldWord & 0xAAAAAAAAu) == 0u) {
         fragColor = chromaVoxEncode(oldWord); return;
     }
     mat4 projection;
@@ -127,6 +162,8 @@ void main() {
         bool retained = valid && chromaVoxContains(voxel, previousOrigin);
         uint confidence = retained ? (oldWord >> uint(i * 2)) & 3u : 0u;
         if (updateSlice || !retained) confidence = observe(voxel, confidence, projection, inverseProjection, rotation, size);
+        else if (confidence >= 2u) confidence = clearObservedAir(voxel, confidence,
+                projection, inverseProjection, rotation, size);
         result |= confidence << uint(i * 2);
     }
     fragColor = chromaVoxEncode(result);

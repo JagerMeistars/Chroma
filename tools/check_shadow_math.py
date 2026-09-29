@@ -32,6 +32,47 @@ def cross(a, b):
     return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
 
 
+def pixel_receiver(receiver, normal, camera, enabled=True):
+    if not enabled or '#define CHROMA_SHADOW_PIXELATE 1' not in CONFIG:
+        return receiver
+    subdivisions = setting('CHROMA_SHADOW_PIXELS_PER_BLOCK')
+    block = tuple(math.floor(x) for x in camera)
+    offset = sub(block, camera)
+    local = tuple(f32(x) for x in sub(receiver, camera))
+    snapped = tuple((math.floor(f32(p-o)*subdivisions)+.5)/subdivisions+o
+                    for p,o in zip(local,offset))
+    axis = next(i for i in range(3) if abs(normal[i]) >= max(map(abs,normal))-.001)
+    delta = list(sub(snapped,local))
+    delta[axis] = 0
+    delta[axis] = -dot(delta,normal)/normal[axis]
+    return add(camera,add(local,delta))
+
+
+def check_pixelation():
+    # Two receivers in one world-grid square must share one shadow sample, while
+    # the adjacent square stays distinct. Sampling never moves off the surface.
+    cameras = ((0,0,0),(-5.3125,7.25,12.875),(14.75,-3.625,-8.125))
+    for shift in (0,29_999_900,-29_999_900):
+        base = (shift,0,shift)
+        expected = add(base,(.125,1.0625,-.125))
+        for camera in cameras:
+            camera = add(camera,base)
+            for point in ((.04,1.0625,-.22),(.21,1.0625,-.03)):
+                got = pixel_receiver(add(base,point),(0,1,0),camera)
+                assert max(abs(x-y) for x,y in zip(got,expected))<2e-5, (got,expected)
+            adjacent = pixel_receiver(add(base,(.29,1.0625,-.1)),(0,1,0),camera)
+            assert abs(adjacent[0]-(shift+.375))<2e-5
+    point,normal = (.21,1.0625,-.03),unit((.3,1,-.2))
+    for camera in cameras:
+        got = pixel_receiver(point,normal,camera)
+        assert abs(dot(sub(got,point),normal))<2e-6, 'Sloped/slab receiver must stay on its plane'
+        assert pixel_receiver(point,normal,camera,False)==point
+    a = pixel_receiver(point,unit((1.000001,1,0)),cameras[1])
+    b = pixel_receiver(point,unit((.999999,1,0)),cameras[1])
+    assert max(abs(x-y) for x,y in zip(a,b))<1e-6, 'Near-tied face normals must select a stable grid'
+    return 'world-grid quarter-block samples, camera/large-coordinate invariance, plane preservation and OFF'
+
+
 def interval(start, direction, low, high):
     near, far = -math.inf, math.inf
     for p, d, a, b in zip(start, direction, low, high):
@@ -249,6 +290,7 @@ def check_octahedral(rng,radius):
 
 
 def main():
+    pixelation = check_pixelation()
     compact = re.sub(r'\s+', '', re.sub(r'//[^\n]*', '', SOURCE))
     for expression in (
         'CameraBlockPos*CHROMA_VOX_CELLS-origin',
@@ -305,6 +347,7 @@ def main():
           f'octahedral seams and {floors} unoccluded planes stay lit '
           f'(old PCF regression={old_acne:.3f}); PCSS penumbra '
           f'{pcss_widths[0]:.3f}->{pcss_widths[1]:.3f}; buried/near-source blockers remain occluded')
+    print('PASS: '+pixelation)
 
 
 if __name__ == '__main__':

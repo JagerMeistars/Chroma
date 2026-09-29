@@ -2,7 +2,31 @@
 
 2026-09-30 (Europe/Moscow). Shadow branch: `codex/source-shadows`. The shadow-free Auto128 baseline remains on `main` at `cda64ae`; see [Auto validation](VALIDATION.md). / Ветка теней: `codex/source-shadows`. Основной Auto128 без теней сохранён в `main`, коммит `cda64ae`; см. [проверки Auto](VALIDATION.md).
 
-## English
+## Revision: source loss and pixelation / Исправление пропадания света и пикселизация
+
+The close-wall source loss was reproduced in the original Dynamic ZIP: at camera distances `0.09`, `0.08`, and `0.06` blocks the camera header and light count both became zero. The same poses passed after adding only the terrain header guard: **14/14** checks with radii 14 and 35.437496 retained the source. This isolates the fix from the voxel and filtering changes. / Пропадание света воспроизведено в исходном Dynamic: на расстояниях камеры `0.09`, `0.08` и `0.06` блока заголовок камеры и число источников обнулялись. После добавления только защиты заголовка в terrain прошли **14/14** повторных проверок с радиусами 14 и 35.437496. Это подтверждает исправление отдельно от изменений вокселей и фильтрации.
+
+Default pixelation was checked in the real client with the same Static geometry and only the pixelation toggle changed. Within 494/485 partially shadowed world-grid squares in two views, the P90 visibility range inside a square was **0** with pixelation and **0.156/0.153** with smooth sampling. Across 485 common squares, changing the camera gave **P95 difference 0**. These are normalized shadow visibility values, not colour or FPS. The square size is 0.25 blocks. / Пикселизация проверена в игре на одинаковой геометрии Static с изменением только переключателя. В 494/485 частично затенённых квадратах двух ракурсов P90 разброса видимости внутри квадрата составил **0** с пикселизацией и **0.156/0.153** с плавной выборкой. Для 485 общих квадратов смена камеры дала **P95 разницы 0**. Это нормированная видимость света, не цвет и не FPS. Размер квадрата — 0.25 блока.
+
+Evidence / Материалы: `audit/shadows/disappearing-{baseline,terrainfix}-live.json`, `revision-pixelation-live.json`. The grayscale preview below shows the actual pixelated shadow mask. / Изображение ниже показывает пиксельную маску тени из игры.
+
+The final Dynamic comparison used the same scene and five-view warmup for both packs. The table counts occupied quarter-cells inside each object's bounds in two camera views; it measures acquired geometry, not a percentage of exact mesh coverage. / Финальное сравнение Dynamic использует одинаковые сцены и предварительный обход пяти ракурсов. Таблица показывает занятые ячейки в границах объекта для двух ракурсов: это объём восстановленной геометрии, а не процент точного покрытия модели.
+
+| Object / Объект | Original / До | Revised / После |
+| --- | --- | --- |
+| Bottom slab / Нижняя плита | 124 / 124 | 124 / 124 |
+| Oak fence / Дубовый забор | 31 / 30 | 76 / 70 |
+| Cow / Корова | 5 / 5 | 57 / 57 |
+
+All 16 final comparison captures retained their source. Moving the cow left zero occupied cells at its old location and acquired 52 at its new location. Removing it and its dropped items left zero cells in both locations and full visibility at all 961 sampled floor points in the tested shadow region. An earlier removal check accidentally included real dropped items; after removing those, two floor-contact cells exposed a separate retention bug. The final plane-based clearing rule fixes those cells while retaining the floor. / Во всех 16 финальных снимках источник оставался активным. При перемещении коровы в прежнем месте осталось ноль занятых ячеек, в новом восстановилось 52. После удаления коровы и выпавших предметов в обоих местах осталось ноль ячеек, а все 961 точки пола в проверяемой области тени полностью освещены. Первоначальная проверка удаления включала реальные выпавшие предметы; после их очистки две ячейки у пола выявили отдельную ошибку сохранения кеша. Финальная проверка плоскости очищает эти ячейки, сохраняя сам пол.
+
+Final geometry evidence / Финальные материалы по геометрии: `revision-geometry-final-live.json`, `revision-loot-diagnosis.json`, `revision-loot-clean.json`. The broader first comparison also covered top slabs, solid walls and cobblestone walls (`revision-geometry-live.json`). Native checks on the revised normal-colour builds passed **21 shaders each**, **164 stages / 82 linked programs** for Dynamic and **152 / 76** for Static. CPU geometry, packed storage, hierarchy, camera precision and pixel-grid checks passed separately. / Первое расширенное сравнение также включало верхние плиты, сплошную стену и булыжную стенку (`revision-geometry-live.json`). Проверки обычных цветных сборок прошли: **по 21 шейдеру**, **164 стадии / 82 связанные программы** для Dynamic и **152 / 76** для Static. Отдельно прошли CPU-проверки геометрии, упаковки, иерархии, точности координат и пиксельной сетки.
+
+The revised builds also passed the general 19-check shadow fixture (`revision-dynamic-final-live.json`, `revision-static-live.json`). The normal-colour Dynamic pack passed the 128-source spread test: 128 distinct colours, five shapes, all four mask banks, all source positions and 128 finite shadow maps with blocker samples. A short paired run at 1920×1080 measured original/revised averages **398.79 / 395.51 FPS**, with slowest-1% averages **270.56 / 261.48 FPS** (5-second warmup, 10-second sample each). The primary game remained open, so these are diagnostic timings under concurrent load, not a general FPS guarantee or a comparison with the isolated measurements below. Report: `revision128-pair-20260929-232224-980100.json`. / Обновлённые сборки также прошли общую сцену из 19 проверок. Обычный цветной Dynamic прошёл проверку 128 разнесённых источников: разные цвета, пять форм, все четыре банка масок, позиции и 128 корректных карт теней с препятствиями. Короткий парный замер при 1920×1080 дал до/после **398.79 / 395.51 FPS**, среднее для худшего 1% кадров — **270.56 / 261.48 FPS** (по 5 секунд прогрева и 10 секунд измерения). Основная игра оставалась открыта, поэтому это диагностические замеры при параллельной нагрузке, не гарантия FPS и не сравнение с изолированными измерениями ниже.
+
+![Pixelated shadow mask in Minecraft / Пиксельная маска тени в Minecraft](images/chroma-shadows-pixel-grid.png)
+
+## Initial release: English
 
 **Both shadow modes passed the recorded live functional checks. 144 FPS is not guaranteed: the dense, distinct-position 128-light test reached about 31 FPS with shadows.** Tests used an isolated vanilla Minecraft Java 26.3 instance and direct Java/renderer probes, without ComputerUse. The helper probes are test infrastructure, not a runtime requirement of the RP.
 
@@ -14,7 +38,7 @@ Camera stability has two distinct limits. Static's partially shadowed regions ha
 
 Native checks separately passed 20/20 pack shaders for each mode, 136 shader stages / 68 driver-linked programs for Dynamic, and 124 / 62 for Static, with zero failures. These compilation checks alone do not establish gameplay performance.
 
-## Русский
+## Исходная версия: русский
 
 **Оба варианта прошли записанные функциональные проверки в игре. 144 FPS не гарантируются: плотная группа из 128 источников в разных позициях дала около 31 FPS с тенями.** Использовался отдельный vanilla-инстанс Minecraft Java 26.3 и прямые Java/рендер-пробы, без ComputerUse. Эти вспомогательные пробы нужны для проверки, а не для работы RP.
 
