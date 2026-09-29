@@ -4,11 +4,37 @@ These are measurements from a launched **Minecraft Java 26.3** client, controlle
 
 Это результаты запущенного **Minecraft Java 26.3**, которым управляли через обычные API игры и из которого напрямую считывали данные. **ComputerUse не использовался.** Временные Java-модули проверки собирали интервалы кадров и читали результат GPU; они не входят в ресурспак и не нужны для его использования.
 
-## Recorded performance / Измеренная производительность
+## Current Auto 128 — live checks / Текущий Auto 128 — игровые проверки
 
-**These timings were collected from the previous 32-source build. The current build has a 128-source budget. The user reports good performance at 64 sources; the 128-source build has not been benchmarked.**
+**The main, shadow-free Auto 128 build was launched and tested at 1920 × 1080 on 2026-09-30.** All 128 current-frame GPU records retained their unique colours, five light shapes, radii, brightness, positions and directions. The union of the tile masks contained every bit in all four 32-source banks (`ffffffff` in each bank). Three camera positions retained all 128 sources, with world-transform consistency error below **0.000016 blocks**.
 
-**Эти замеры получены на предыдущей сборке с пределом 32 источника. В текущей версии предел — 128 источников. Пользователь сообщил о хорошей производительности на 64; скорость версии на 128 источниках пока не измерялась.**
+Seven removal/restore checks targeted compact-list indices **31, 32, 63, 64, 95, 96 and 127**. Each produced a visible floor contribution: peak channel difference **15–50 / 255**, **135–470 changed floor pixels**, control noise **0–2 / 255**. These are selected bank-boundary contribution checks, **not 128 separate per-source image tests**. Removing all sources cleared the catalogue, counts, indices, decoded records, colours and tile masks; the 128-light fixture was then restored.
+
+**Основная версия Auto 128 без теней запущена и проверена при 1920 × 1080 30.09.2026.** Все 128 записей GPU сохранили уникальные цвета, пять форм света, радиусы, яркость, позиции и направления. Объединение масок участков содержало все биты каждого из четырёх банков по 32 источника (`ffffffff` в каждом). В трёх положениях камеры сохранялись все 128 источников; ошибка согласованности преобразований мира — менее **0,000016 блока**.
+
+Выполнены семь удалений/восстановлений для индексов компактного списка **31, 32, 63, 64, 95, 96 и 127**. В каждом случае подтверждён вклад в изображение пола: максимальная разница канала **15–50 из 255**, **135–470 изменившихся пикселей**, контрольный шум **0–2 из 255**. Это выборочные проверки границ банков, **а не 128 отдельных проверок вклада каждой лампы**. После удаления всех источников обнулились каталог, счётчики, индексы, декодированные записи, цвета и маски участков; затем сцена из 128 ламп восстановлена.
+
+Evidence / Отчёт: `audit/shadows/baseline128-live.json` and `baseline128-live.commands.json`; captures are named in the report. Despite the audit folder name, these checks loaded **`file/Chroma-Auto-128.zip` without shadows**. / Несмотря на название папки отчётов, проверки выполнялись с **`file/Chroma-Auto-128.zip` без теней**.
+
+### Current performance / Текущая производительность
+
+| Build and scene / Сборка и сцена | Average FPS / Средний FPS | 1% low FPS | Median frame, ms / Медиана кадра, мс | P99 frame, ms / P99 кадра, мс | Frames > 6.944 ms / Кадры > 6,944 мс |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Auto 128: spread / разнесены | 894.24 | 319.57 | 1.0067 | 2.5758 | 4 / 17885 |
+
+This is the Auto run `final128-spread-auto` from the current comparison fixture: **128 lights**, white floor, camera **`(0, 28, 0)`, yaw `0°`, pitch `90°`**. Minecraft Java 26.3, RTX 4060 Ti, NVIDIA 595.71, OpenGL, **1920 × 1080**, FOV 70, render/simulation distances 8/5. Packs: `vanilla` and `file/Chroma-Auto-128.zip`. The window was unfocused, not minimized, and unpaused; VSync was off, presentation immediate, effective frame limit unlimited, throttle reason `NONE`. Camera and settings matched at the beginning and end.
+
+After **10 seconds of warm-up**, the probe retained **17,885 complete frame intervals over 20.00021 seconds**, with **zero invalid frames** and no GPU readback during measurement. Four frames exceeded the 144 FPS budget. Average and 1% low exceeded 144 FPS in this fixture; this is not a guarantee for every frame, heavy worlds or 128 overlapping lights. The earlier `baseline128-spread` run used a different camera and is not substituted into this table or treated as a direct comparison.
+
+Это прогон Auto `final128-spread-auto` из текущей сравнительной сцены: **128 ламп**, белый пол, камера **`(0, 28, 0)`, yaw `0°`, pitch `90°`**. Minecraft Java 26.3, RTX 4060 Ti, NVIDIA 595.71, OpenGL, **1920 × 1080**, FOV 70, дальность прорисовки/симуляции 8/5. Включены `vanilla` и `file/Chroma-Auto-128.zip`. Окно было без фокуса, не свёрнуто, игра не на паузе; VSync выключен, вывод немедленный, ограничение FPS снято, причина троттлинга `NONE`. Камера и настройки в начале и конце совпали.
+
+После **10 секунд прогрева** записано **17 885 полных интервалов кадров за 20,00021 секунды**, **некорректных кадров — ноль**; считывания GPU во время замера не было. Четыре кадра превысили бюджет для 144 FPS. Средний FPS и 1% low выше 144 в этой сцене; это не гарантия для каждого кадра, тяжёлого мира или 128 перекрывающихся ламп. Ранний прогон `baseline128-spread` использовал другую камеру и не подставляется в таблицу как прямое сравнение.
+
+Evidence / Файлы: `audit/shadows/benchmark/results/final128-spread-auto.json` and `.csv`; earlier separate-view run / ранний прогон с другим ракурсом: `audit/shadows/benchmark/results/baseline128-spread.json` and `.csv`. These Auto results do not establish shadow performance; separate shadow benchmarking is still being completed. / Результаты Auto не подтверждают производительность теней; отдельные замеры версий с тенями ещё выполняются.
+
+## Historical 32-source performance / Прежние замеры 32 источников
+
+The following measurements belong to the earlier **32-source** builds and are retained as historical comparisons. / Следующие замеры относятся к прежним сборкам на **32 источника** и сохранены для истории сравнений.
 
 | Build and scene / Сборка и сцена | Average FPS / Средний FPS | 1% low FPS | Median frame, ms / Медиана кадра, мс | P99 frame, ms / P99 кадра, мс | Frames > 6.944 ms / Кадры > 6,944 мс |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -39,11 +65,11 @@ Raw evidence in the development workspace / Исходные данные в р�
 - `audit/slotless/benchmark/results/original32-overlap-a.json` and `.csv`
 - `audit/slotless/benchmark/results/automatic32-overlap-a.json` and `.csv`
 
-## Functional checks / Проверка работы
+## Historical 32-source functional checks / Прежние проверки 32 источников
 
-**The functional and edge-case live checks below also used the earlier 32-source build. They do not verify this 128-source shader configuration; the updated pack has not been launched or profiled at 128 sources.**
+**The checks below used the earlier 32-source build. Their broader per-source, coincidence and small-window coverage must not be attributed to the current 128-source configuration; the separate current checks are documented above.**
 
-**Игровые функциональные проверки и граничные случаи ниже также выполнены на прежней сборке с пределом 32 источника. Они не подтверждают работу текущей конфигурации шейдеров на 128 источниках; обновлённый пак не запускался и не измерялся с 128 источниками.**
+**Проверки ниже выполнены на прежней сборке с пределом 32 источника. Их более широкую проверку вклада каждой лампы, совпадающих источников и маленького окна нельзя переносить на текущую конфигурацию 128; её отдельные проверки описаны выше.**
 
 The full direct-client audit **passed** at 1920 × 1080:
 
@@ -73,14 +99,14 @@ A separate live check passed (`audit/slotless/edge-verification.json`): with **z
 
 ## Final offline checks / Итоговые проверки файлов
 
-The current 128-source assets were checked again on 2026-09-30 with Minecraft 26.3's compiler: **14/14 shaders**. The exact client OpenGL translation produced **114 shader stages**, and the local NVIDIA driver linked **57 core/post program variants** with zero failures. The documented examples passed Minecraft's parsers: **152 commands, 132 summon payloads and 12 detached NBT edits**, no errors. The resource graph has eight post passes, five primary marker models and ten marker textures; its 160 legacy item aliases do not encode source IDs. The supplied RPDREVO hash manifest is unchanged.
+The main, shadow-free Auto 128 assets were checked again on 2026-09-30 with Minecraft 26.3's compiler: **14/14 shaders**. The exact client OpenGL translation produced **114 shader stages**, and the local NVIDIA driver linked **57 core/post program variants** with zero failures. The documented examples passed Minecraft's parsers: **152 commands, 132 summon payloads and 12 detached NBT edits**, no errors. The resource graph has eight post passes, five primary marker models and ten marker textures; its 160 legacy item aliases do not encode source IDs. The supplied RPDREVO hash manifest is unchanged.
 
-Текущие файлы версии на 128 источников повторно проверены 30.09.2026 компилятором Minecraft 26.3: **14 из 14 шейдеров**. Точный путь преобразования OpenGL дал **114 стадий**, драйвер NVIDIA скомпоновал **57 вариантов core/post-программ** без ошибок. Примеры проверены парсерами Minecraft: **152 команды, 132 NBT создания и 12 изменений отдельных копий NBT**, ошибок нет. В графе ресурсов восемь проходов, пять основных моделей и десять текстур маркеров; 160 прежних названий предметов служат совместимости и не задают ID источников. Хеши исходного RPDREVO не изменились.
+Файлы основной версии Auto 128 без теней повторно проверены 30.09.2026 компилятором Minecraft 26.3: **14 из 14 шейдеров**. Точный путь преобразования OpenGL дал **114 стадий**, драйвер NVIDIA скомпоновал **57 вариантов core/post-программ** без ошибок. Примеры проверены парсерами Minecraft: **152 команды, 132 NBT создания и 12 изменений отдельных копий NBT**, ошибок нет. В графе ресурсов восемь проходов, пять основных моделей и десять текстур маркеров; 160 прежних названий предметов служат совместимости и не задают ID источников. Хеши исходного RPDREVO не изменились.
 
 Evidence / Файлы: `audit/assets.json`, `audit/ValidatePack.log`, `audit/ReproduceClientShaders.log`, `audit/CheckDriver.log`, `audit/examples-validation.json`. These offline checks supplement the real-client tests above; they are not FPS measurements.
 
 ## Scope / Границы результата
 
-These runs isolate lighting on a simple loaded floor fixture. Terrain complexity, CPU load, other entities, other packs, resolution, source overlap and hardware can change performance. The current automatic list has a finite **128-source budget**. The user reports good performance at 64 sources; 128 have not been live-tested. The performance samples below are from the previous 32-source build. The internal raw-address capacity is also finite and depends on resolution; a 320 × 240 frame provides **6,240** raw addresses. The earlier live small-window check confirmed collection of 32 sources; 64 sources at small resolutions have not been checked; the current 128-source build has not been live-tested. No claim is made here for Vulkan, rendering mods or arbitrary pack combinations.
+These runs isolate shadow-free lighting on simple loaded floor fixtures. Terrain complexity, CPU load, other entities, other packs, resolution, source overlap and hardware can change performance. The current automatic list has a finite **128-source budget**, live-tested at **1920 × 1080** as detailed above. The internal raw-address capacity is also finite and depends on resolution; a 320 × 240 frame provides **6,240** raw addresses. The earlier small-window check confirmed collection of **32 sources only**; 64/128 sources at small resolutions have not been checked. The historical 32-source overlap results are not a 128-source overlap test. No claim is made here for shadow-edition FPS, Vulkan, rendering mods or arbitrary pack combinations.
 
-Замеры изолируют освещение на простой загруженной сцене с полом. Сложность мира, нагрузка CPU, другие сущности и паки, разрешение, перекрытие источников и оборудование влияют на FPS. У текущего автоматического списка конечный **бюджет 128 источников**. Пользователь сообщил о хорошей производительности на 64 источниках; версия на 128 в игре не проверялась. Замеры производительности выше сделаны на предыдущей сборке с пределом 32 источника. Пространство исходных адресов тоже ограничено разрешением: при 320 × 240 доступно **6240** адресов. В предыдущей версии в этом маленьком окне в игре подтверждён сбор 32 источников; 64 источника при малом разрешении и текущая версия на 128 источников пока не проверялись. Vulkan, моды рендеринга и произвольные сочетания паков здесь не заявлены как проверенные.
+Замеры изолируют освещение без теней на простых загруженных сценах с полом. Сложность мира, нагрузка CPU, другие сущности и паки, разрешение, перекрытие источников и оборудование влияют на FPS. У текущего автоматического списка конечный **бюджет 128 источников**, проверенный в игре при **1920 × 1080**, как описано выше. Пространство исходных адресов тоже ограничено разрешением: при 320 × 240 доступно **6240** адресов. Прежняя проверка маленького окна подтверждает сбор **только 32 источников**; 64/128 источников при малом разрешении не проверялись. Прежние результаты перекрытия 32 ламп не являются тестом перекрытия 128. FPS вариантов с тенями, Vulkan, моды рендеринга и произвольные сочетания паков здесь не заявлены как проверенные.
