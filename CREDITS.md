@@ -1,0 +1,9 @@
+# Provenance / Происхождение
+
+The starting point was Chroma's lighting effect and marker assets in the supplied **RPDREVO** resource pack for Minecraft Java Edition 26.3. The first standalone edition removed unrelated map resources and the shadow implementation. This automatic-source edition rewrites marker geometry and data transport, adds GPU catalogue counting and compaction, and rewrites the lighting path around tile masks. It preserves the source effect's visual approach, the five light shapes and the legacy model identifiers; it is not an unchanged extraction of the original shaders.
+
+No separate Chroma author credit or Chroma license was found in the supplied resource pack. This document records the source; it does not grant a new license or establish redistribution rights. Existing authors retain their rights. Minecraft is a product of Mojang Studios; this is an unofficial resource pack.
+
+Основой послужили эффект освещения Chroma и материалы маркеров из предоставленного ресурспака **RPDREVO** для Minecraft Java Edition 26.3. В первой отдельной версии удалены посторонние ресурсы карты и реализация теней. В версии с автоматическим сбором заново реализованы геометрия маркеров и передача данных, добавлены подсчёт и уплотнение каталога GPU, а освещение переработано с отбором источников по участкам экрана. Сохранены визуальный подход исходного эффекта, пять форм света и прежние идентификаторы моделей; это не неизменённая копия оригинальных шейдеров.
+
+В предоставленном ресурспаке не найдены отдельные сведения об авторе и лицензии Chroma. Этот файл фиксирует происхождение материалов и не предоставляет новую лицензию или права на их распространение. Права остаются у соответствующих авторов. Minecraft принадлежит Mojang Studios; этот ресурспак не является официальным продуктом.

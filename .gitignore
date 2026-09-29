@@ -1,0 +1,7 @@
+/dist/
+/audit/
+/logs/
+__pycache__/
+*.class
+*.args
+/tools/live/*.jar

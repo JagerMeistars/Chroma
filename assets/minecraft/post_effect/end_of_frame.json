@@ -1,0 +1,166 @@
+{
+  "targets": {
+    "catalog": {
+      "width": 2048,
+      "height": 1,
+      "persistent": true
+    },
+    "counts": {
+      "width": 64,
+      "height": 1,
+      "persistent": true
+    },
+    "indices": {
+      "width": 128,
+      "height": 1,
+      "persistent": true
+    },
+    "colorcache": {
+      "width": 128,
+      "height": 1,
+      "persistent": true
+    },
+    "matdec": {
+      "width": 2176,
+      "height": 1,
+      "persistent": true
+    },
+    "tile_masks": {
+      "width": 512,
+      "height": 72,
+      "persistent": true
+    },
+    "swap": {}
+  },
+  "passes": [
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/auto_catalog",
+      "inputs": [
+        {
+          "sampler_name": "Main",
+          "target": "minecraft:main"
+        }
+      ],
+      "output": "catalog"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/auto_counts",
+      "inputs": [
+        {
+          "sampler_name": "Catalog",
+          "target": "catalog"
+        }
+      ],
+      "output": "counts"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/auto_indices",
+      "inputs": [
+        {
+          "sampler_name": "Catalog",
+          "target": "catalog"
+        },
+        {
+          "sampler_name": "Counts",
+          "target": "counts"
+        }
+      ],
+      "output": "indices"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/auto_colors",
+      "inputs": [
+        {
+          "sampler_name": "Main",
+          "target": "minecraft:main"
+        },
+        {
+          "sampler_name": "Indices",
+          "target": "indices"
+        }
+      ],
+      "output": "colorcache"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/auto_decode",
+      "inputs": [
+        {
+          "sampler_name": "Main",
+          "target": "minecraft:main"
+        },
+        {
+          "sampler_name": "Indices",
+          "target": "indices"
+        },
+        {
+          "sampler_name": "Counts",
+          "target": "counts"
+        }
+      ],
+      "output": "matdec"
+    },
+    {
+      "vertex_shader": "chroma:post/shade",
+      "fragment_shader": "chroma:post/tile_masks",
+      "inputs": [
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Scene",
+          "target": "minecraft:main"
+        }
+      ],
+      "output": "tile_masks"
+    },
+    {
+      "vertex_shader": "chroma:post/shade",
+      "fragment_shader": "chroma:post/shade",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "minecraft:main"
+        },
+        {
+          "sampler_name": "InDepth",
+          "target": "minecraft:main",
+          "use_depth_buffer": true
+        },
+        {
+          "sampler_name": "Color",
+          "target": "colorcache"
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Tile",
+          "target": "tile_masks"
+        },
+        {
+          "sampler_name": "Catalog",
+          "target": "catalog"
+        }
+      ],
+      "output": "swap"
+    },
+    {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/copy",
+      "inputs": [
+        {
+          "sampler_name": "In",
+          "target": "swap"
+        }
+      ],
+      "output": "minecraft:main"
+    }
+  ]
+}

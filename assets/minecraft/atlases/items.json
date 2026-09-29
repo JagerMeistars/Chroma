@@ -1,0 +1,44 @@
+{
+  "sources": [
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_header"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_spot_narrow"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_spot_narrow_header"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_spot"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_spot_header"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_spot_wide"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_spot_wide_header"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_dome"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "chroma:custom/marker_dome_header"
+    }
+  ]
+}
