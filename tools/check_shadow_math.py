@@ -197,6 +197,7 @@ def bounded_reference(ray, normal, plane, delta, footprint):
 
 
 def bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius):
+    # Retained only as the old hard-footprint regression reference.
     p = tuple(v*n-.5 for v in oct_uv(ray))
     base = tuple(math.floor(v) for v in p)
     w = tuple(v-b for v,b in zip(p,base))
@@ -208,6 +209,31 @@ def bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius):
         amount = (w[0] if x else 1-w[0])*(w[1] if y else 1-w[1])
         depth = sampler(sample_ray)
         visible += amount*float(depth>=light_radius-.001 or depth>=reference_depth)
+        weight += amount
+    return visible,weight
+
+
+def weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_radius,receiver_bias,foreground_limit):
+    p = tuple(v*n-.5 for v in oct_uv(ray))
+    base = tuple(math.floor(v) for v in p)
+    w = tuple(v-b for v,b in zip(p,base))
+    visible = weight = 0.0
+    for x,y in ((0,0),(1,0),(0,1),(1,1)):
+        sample_ray = oct_ray((base[0]+x,base[1]+y),n)
+        depth = sampler(sample_ray)
+        amount = (w[0] if x else 1-w[0])*(w[1] if y else 1-w[1])
+        reference_depth = receiver_depth(sample_ray,normal,surface_plane+receiver_bias)
+        if depth >= light_radius-.001:
+            if reference_depth > light_radius: amount = 0.0
+            lit = 1.0
+        elif -.02 <= dot(sample_ray,normal)*depth-surface_plane <= receiver_bias+.02:
+            t = min(max((depth-foreground_limit)/footprint,0.0),1.0)
+            amount *= t*t*(3-2*t)
+            lit = 1.0
+        else:
+            reference_depth = distance if reference_depth>1e5 else max(distance,reference_depth)
+            lit = float(depth >= reference_depth-.02)
+        visible += amount*lit
         weight += amount
     return visible,weight
 
@@ -226,10 +252,13 @@ def shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius):
     return float(depth<0 or depth>=light_radius-.001 or depth>=distance-.02)
 
 
-def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035):
-    sampler = lambda ray: min(analytic_depth(ray,light,receiver,normal,boxes),light_radius)
+def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_footprint=False,receiver_hull_offset=0.0):
+    hull = add(receiver,mul(normal,receiver_hull_offset))
+    sampler = lambda ray: min(analytic_depth(ray,light,hull,normal,boxes),light_radius)
     height = max(dot(sub(light,receiver),normal),0.0)
-    delta = sub(add(receiver,mul(normal,min(bias,height*.5))),light)
+    surface_plane = dot(sub(receiver,light),normal)
+    receiver_bias = min(bias,height*.5)
+    delta = sub(add(receiver,mul(normal,receiver_bias)),light)
     distance,axis = math.sqrt(dot(delta,delta)),unit(delta)
     center_pixel = tuple(int(v*n) for v in oct_uv(axis))
     center_depth = sampler(oct_ray(center_pixel,n))
@@ -248,21 +277,30 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035):
         cell = tuple(int(v*n) for v in oct_uv(ray))
         actual_ray = oct_ray(cell,n)
         depth = sampler(actual_ray)
-        reference_depth = bounded_reference(actual_ray,normal,plane,delta,search_footprint)
+        if legacy_footprint:
+            reference_depth = bounded_reference(actual_ray,normal,plane,delta,search_footprint)
+        else:
+            on_surface = -.02 <= dot(actual_ray,normal)*depth-surface_plane <= receiver_bias+.02
+            reference_depth = None if on_surface else distance-.02
         if reference_depth is not None and .0001<depth<light_radius-.001 and depth<reference_depth:
             blockers.append(depth)
     if not blockers:
-        visible,weight = bounded_pcf(axis,normal,plane,delta,texel_footprint,sampler,n,light_radius)
+        visible,weight = (bounded_pcf(axis,normal,plane,delta,texel_footprint,sampler,n,light_radius)
+                          if legacy_footprint else
+                          weighted_pcf(axis,normal,surface_plane,distance,texel_footprint,sampler,n,light_radius,receiver_bias,distance))
         return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
     blocker = sum(blockers)/len(blockers)
     penumbra = radius*max(distance-blocker,0)/max(distance*blocker,.01)
     filter_angle = max(penumbra,.7/n)
     footprint = distance*filter_angle+texel_footprint
+    foreground_limit = max(distance*.5,min(distance,max(blockers)+texel_footprint))
     visible = weight = 0.0
     for i in range(16):
         angle,r = i*2.39996323,math.sqrt((i+.5)/16)*filter_angle
         ray = unit(add(axis,add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle)))))
-        lit,amount = bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius)
+        lit,amount = (bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius)
+                      if legacy_footprint else
+                      weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_radius,receiver_bias,foreground_limit))
         visible += lit
         weight += amount
     return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
@@ -271,15 +309,19 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035):
 def check_octahedral(rng,radius):
     n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
     source = re.sub(r'\s+','',re.sub(r'//[^\n]*','',FILTER))
-    assert source.count('chromaBoundedReference(chromaShadowDirection(pixel),normal,plane,delta,')==2, 'PCF and blocker search must compare the actual sampled texel ray'
-    assert 'depth>=lightRadius-0.001?1.0:step(reference-0.02,depth)' in source
-    assert 'if(reference<0.0)returnvec2(0.0);' in source
-    assert 'receiver+=normal*min(bias,height*0.5);' in source
+    assert 'chromaBoundedReference' not in source, 'Hard plane-footprint rejection makes shadow contours discontinuous'
+    assert 'reference=reference>1e5?distance:max(distance,reference);' in source
+    assert 'returnreference<=lightRadius?vec2(1.0):vec2(0.0);' in source
+    assert 'chromaShadowReceiverHit(dot(direction,normal)*depth-surfacePlane,receiverBias)' in source
+    assert 'returnsurfaceOffset>=-0.02&&surfaceOffset<=receiverBias+0.02;' in source
+    assert 'floatweight=smoothstep(foregroundLimit,foregroundLimit+footprint,depth);' in source
+    assert 'floatforegroundLimit=max(distance*0.5,min(distance,farthestBlocker+texelFootprint));' in source
+    assert 'floatreceiverBias=min(bias,height*0.5);receiver+=normal*receiverBias;' in source
     assert 'returnvisible.y>0.00001?visible.x/visible.y:chromaShadowFallback(lamp,axis,normal,plane,distance,lightRadius);' in source
     assert 'if(centerDepth<=0.0001)return0.0;' in source
-    assert 'reference>=0.0&&depth>0.0001&&depth<lightRadius-0.001&&depth<reference-0.02' in source
+    assert '!chromaShadowReceiverHit(surfaceOffset,receiverBias)&&depth>0.0001&&depth<lightRadius-0.001&&depth<distance-0.02' in source
     for offset in ('base','base+ivec2(1,0)','base+ivec2(0,1)','base+ivec2(1,1)'):
-        assert f'chromaShadowCompare(lamp,{offset},normal,plane,delta,footprint,lightRadius)' in source
+        assert f'chromaShadowCompare(lamp,{offset},normal,surfacePlane,distance,footprint,lightRadius,receiverBias,foregroundLimit)' in source
     # Fold every possible bilinear seam/corner neighbour inside its source tile.
     for x in range(-1,n+1):
         for y in (-1,0,n-1,n):
@@ -388,6 +430,93 @@ def check_room_occlusion(radius):
     return tested
 
 
+def check_shadow_contour(radius):
+    """A straight half-wall must not produce disconnected teeth in its shadow.
+
+    Geometry is analytic, not a voxel capture: y=0 is the receiver, the source
+    is (2,2,-4), and a wall occupies x<=0 at z=0. Its point-source edge is the
+    straight line x=-z/2. A disk source softens that edge, without isolated lit
+    islands or full lit-to-dark reversals while moving toward the clear side.
+    """
+    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+
+    def contour(permutation,sign,legacy=False):
+        rotate = lambda v: tuple(sign*v[i] for i in permutation)
+        a,b = rotate((-100,-1,-.25)),rotate((0,10,0))
+        boxes = [(tuple(min(x,y) for x,y in zip(a,b)),tuple(max(x,y) for x,y in zip(a,b)))]
+        light,normal = rotate((2,2,-4)),rotate((0,1,0))
+        reverse,edges,multiple = 0.0,[],0
+        for row in range(65):
+            z = 2+row*.25
+            # Independent segments establish which side of the analytic edge
+            # is blocked; a reversed implementation cannot pass just by being smooth.
+            assert reference(rotate((-z*.5-1,0,z)),light,boxes)
+            assert not reference(rotate((-z*.5+1,0,z)),light,boxes)
+            values = [pcss(rotate((-z*.5-.8+i*.04,0,z)),normal,light,boxes,n,radius,40,
+                           legacy_footprint=legacy) for i in range(41)]
+            reverse = max(reverse,max(a-b for a,b in zip(values,values[1:])))
+            crossings = [-.8+i*.04+(.5-a)/(b-a)*.04
+                         for i,(a,b) in enumerate(zip(values,values[1:]))
+                         if a!=b and (a-.5)*(b-.5)<=0]
+            multiple += len(crossings)!=1
+            edges.append(crossings[0] if crossings else math.nan)
+        jump = max(abs(a-b) for a,b in zip(edges,edges[1:]) if math.isfinite(a+b))
+        return reverse,jump,multiple
+
+    old_reverse,old_jump,old_multiple = contour((0,1,2),1,True)
+    assert old_reverse>.95 and old_jump>.5 and old_multiple, 'Fixture must expose hard footprint teeth'
+    worst_reverse = worst_jump = 0.0
+    for permutation in ((0,1,2),(1,2,0),(2,0,1)):
+        for sign in (-1,1):
+            reverse,jump,multiple = contour(permutation,sign)
+            # Finite angular/tap sampling still introduces small variations;
+            # the previous 100% reversals and disconnected contours are forbidden.
+            assert reverse<.04 and jump<.125 and multiple==0, (permutation,sign,reverse,jump,multiple)
+            worst_reverse = max(worst_reverse,reverse)
+            worst_jump = max(worst_jump,jump)
+
+    # The smooth treatment must not make foreground receiver-plane samples
+    # reveal a closed wall. Include walls almost touching the receiving point.
+    for z in (.1,1,2,3,3.9):
+        boxes = [((-100,-100,z),(100,100,z+.05))]
+        for height in (.001,.1,.3,1):
+            receiver,light = (0,0,4),(height,0,0)
+            assert all(reference(receiver,s,boxes) for s in samples(receiver,light,128,radius))
+            assert pcss(receiver,(1,0,0),light,boxes,n,radius,12)<1e-12
+    return old_reverse,old_jump,worst_reverse,worst_jump
+
+
+def check_receiver_hull(radius):
+    """A rounded voxel surface inside the applied bias is still a clear floor.
+
+    The map sampler intersects an independently shifted analytic plane; the
+    shaded surface stays at its original position. This exposes strict planar
+    self-hit recognition that incorrectly shadows slabs and sloped surfaces.
+    """
+    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    count = 0
+    for normal in ((0,1,0),(1,0,0),unit((.3,1,-.2)),unit((1,1,1))):
+        tangent = unit(cross(normal,(0,0,1)))
+        for distance in (4,12,24):
+            light = add(mul(tangent,distance),mul(normal,.6))
+            for bias,offsets in ((.035,(0,.015625,.03125)),(.18,(0,.03125,.0625,.125,.18))):
+                for offset in offsets:
+                    value = pcss((0,0,0),normal,light,[],n,radius,40,bias,receiver_hull_offset=offset)
+                    assert value>1-1e-12, ('Clear receiver voxel hull darkened',normal,distance,bias,offset,value)
+                    count += 1
+    # A distinct parallel slab outside that bias band must still block every
+    # physical source sample, including directions close to the map horizon.
+    for bottom,top in ((.22,.24),(.25,.5)):
+        boxes = [((-100,bottom,-100),(100,top,100))]
+        for distance in (4,12,24):
+            receiver,light = (0,0,0),(distance,.6,0)
+            assert all(reference(receiver,s,boxes) for s in samples(receiver,light,128,radius))
+            for bias in (.035,.18):
+                value = pcss(receiver,(0,1,0),light,boxes,n,radius,40,bias)
+                assert value<1e-12, ('Parallel near-receiver slab leaked',bottom,top,distance,bias,value)
+    return count
+
+
 def main():
     pixelation = check_pixelation()
     compact = re.sub(r'\s+', '', re.sub(r'//[^\n]*', '', SOURCE))
@@ -442,6 +571,8 @@ def main():
     else: assert bounded
     floors,old_acne,pcss_widths = check_octahedral(rng,radius)
     room_cases = check_room_occlusion(radius)
+    contour = check_shadow_contour(radius)
+    hulls = check_receiver_hull(radius)
     print(f'PASS: {tested} ray/camera/large-coordinate comparisons; penumbra widths '
           f'{widths[0]:.3f}->{widths[1]:.3f}; bounded traversal checked; '
           f'octahedral seams and {floors} unoccluded planes stay lit '
@@ -450,6 +581,11 @@ def main():
     print('PASS: '+pixelation)
     print(f'PASS: {room_cases} blocked/open room-wall pairs, Static/Dynamic bias, grazing angles, '
           'six orientations and camera translations; opaque backfaces receive no direct lamp energy')
+    print(f'PASS: analytic straight-wall contour, six orientations; worst visibility reversal '
+          f'{contour[0]:.3f}->{contour[2]:.3f}, edge step {contour[1]:.3f}->{contour[3]:.3f} blocks; '
+          'near-receiver opaque walls remain blocked')
+    print(f'PASS: {hulls} shifted voxel receiver planes stay lit, including slopes; '
+          '12 parallel near-receiver slab cases remain fully blocked')
 
 
 if __name__ == '__main__':

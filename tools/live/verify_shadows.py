@@ -132,6 +132,7 @@ def wall(audit, present=True):
 
 
 def setup(audit):
+    audit.commands('gamemode spectator @p')
     for tag in (TAG, 'chroma.audit128', 'chroma.demo32', 'chroma.test128', 'chroma.slotless.audit.dummy'):
         clear(audit, tag)
     audit.commands(camera_command(VIEWS[0]))

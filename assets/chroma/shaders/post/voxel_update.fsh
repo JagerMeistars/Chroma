@@ -35,10 +35,62 @@ vec3 eyeAt(ivec2 p, float depth, mat4 inverseProjection, ivec2 size) {
     vec4 eye = inverseProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
     return eye.xyz / eye.w;
 }
+bool footprintVacant(ivec3 voxel, mat4 projection, mat4 inverseProjection,
+                     mat3 rotation, ivec2 size) {
+    vec3 low = chromaVoxCentre(voxel) - vec3(CHROMA_VOX_CELL * 0.5);
+    vec3 high = low + vec3(CHROMA_VOX_CELL);
+    ivec2 first = size, last = ivec2(-1);
+    for (int i = 0; i < 8; ++i) {
+        vec3 corner = mix(low, high, bvec3((i & 1) != 0, (i & 2) != 0, (i & 4) != 0));
+        vec4 clip = projection * vec4(rotation * corner, 1.0);
+        // Near clipping or an incomplete screen footprint provides no proof.
+        if (clip.w <= 0.0) return false;
+        vec3 ndc = clip.xyz / clip.w;
+        if (ndc.z <= 0.0 || ndc.z >= 1.0) return false;
+        ivec2 pixel = ivec2(floor((ndc.xy * 0.5 + 0.5) * vec2(size)));
+        first = min(first, pixel); last = max(last, pixel);
+    }
+    if (any(lessThan(first, ivec2(2))) || any(greaterThanEqual(last, size - 2))) return false;
+    mat3 inverseRotation = transpose(rotation);
+    bool tested = false;
+    // Only a proposed confidence decrease pays for this scan. A visible or
+    // occluding surface exits immediately; empty footprints require all rays.
+    // ponytail: large near-camera removals cost pixels; add a depth hierarchy only if profiling requires it.
+    for (int y = first.y; y <= last.y; ++y) {
+        for (int x = first.x; x <= last.x; ++x) {
+            ivec2 pixel = ivec2(x, y);
+            // Camera bob includes translation inside ProjMat. Two unprojected
+            // points recover its actual ray; an origin-zero ray is incorrect.
+            vec3 nearEye = eyeAt(pixel, 1.0, inverseProjection, size);
+            vec3 farEye = eyeAt(pixel, 0.001, inverseProjection, size);
+            vec3 start = inverseRotation * nearEye;
+            vec3 direction = inverseRotation * (farEye - nearEye);
+            vec3 inv = 1.0 / mix(direction, vec3(1e-20), lessThan(abs(direction), vec3(1e-7)));
+            vec3 a = (low - start) * inv, b = (high - start) * inv;
+            vec3 enter = min(a, b), leave = max(a, b);
+            float nearT = max(max(enter.x, max(enter.y, enter.z)), 0.0);
+            float farT = min(leave.x, min(leave.y, leave.z));
+            if (farT <= nearT) continue;
+            tested = true;
+            if (!evidencePixel(pixel, size)) return false;
+            float depth = texelFetch(InDepthSampler, pixel, 0).r;
+            if (depth >= 0.999999) return false;
+            if (depth <= 0.000001) continue;
+            vec3 hit = inverseRotation * eyeAt(pixel, depth, inverseProjection, size);
+            float rayLength2 = dot(direction, direction);
+            float surfaceT = dot(hit - start, direction) / rayLength2;
+            // Contact with the far face belongs to the neighbouring cell.
+            // One millimetre absorbs unprojection roundoff without widening it
+            // to a whole quarter-cell and erasing thin visible geometry.
+            if (surfaceT < farT - 0.001 * inversesqrt(rayLength2)) return false;
+        }
+    }
+    return tested;
+}
 uint clearObservedAir(ivec3 voxel, uint previous, mat4 projection,
                       mat4 inverseProjection, mat3 rotation, ivec2 size) {
-    // Occupied cells get this cheap check every frame. A moving visible caster
-    // must not leave an eight-slice trail; hidden space still remains unknown.
+    // Occupied cells get this cheap candidate check every frame. The final
+    // footprint gate distinguishes an empty cell from a missed silhouette.
     vec3 centreEye = rotation * chromaVoxCentre(voxel);
     ivec2 p;
     if (!projectPixel(centreEye, projection, size, p)) return previous;
@@ -59,7 +111,7 @@ uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection
     if (d >= 0.999999) return previous;
     if (d <= 0.000001) return 0u;
     vec3 surface = eyeAt(p, d, inverseProjection, size);
-    // A cell entirely before the nearest visible surface is proven empty.
+    // The centre suggests vacancy; main still requires full-footprint proof.
     if (centreEye.z > surface.z + 0.25) return 0u;
     if (abs(centreEye.z - surface.z) > 1.0) return previous;
     ivec2 px[4] = ivec2[4](p + ivec2(-1,0), p + ivec2(1,0),
@@ -166,9 +218,15 @@ void main() {
         ivec3 voxel = origin + ((wrapped + ivec3(i,0,0) - origin) & (CHROMA_VOX_N - 1));
         bool retained = valid && chromaVoxContains(voxel, previousOrigin);
         uint confidence = retained ? (oldWord >> uint(i * 2)) & 3u : 0u;
+        uint previousConfidence = confidence;
         if (updateSlice || !retained) confidence = observe(voxel, confidence, projection, inverseProjection, rotation, size);
         else if (confidence >= 2u) confidence = clearObservedAir(voxel, confidence,
                 projection, inverseProjection, rotation, size);
+        // Acquisition can hit any visible part of a voxel. Every downward path
+        // (sky, centre depth, probe or contact plane) needs equally broad proof.
+        if (retained && previousConfidence > 0u && confidence < previousConfidence
+                && !footprintVacant(voxel, projection, inverseProjection, rotation, size))
+            confidence = previousConfidence;
         result |= confidence << uint(i * 2);
     }
     fragColor = chromaVoxEncode(result);
