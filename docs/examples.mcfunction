@@ -27,4 +27,4 @@ tp @e[type=minecraft:item_display,tag=chroma.demo.warm,sort=nearest,limit=1] ~ ~
 
 # CLEANUP / УДАЛИТЬ
 # Only the demo markers in this dimension. / Только маркеры примеров в этом измерении.
-kill @e[type=minecraft:item_display,tag=chroma.demo]
+kill @e[type=minecraft:item_display,distance=0..,tag=chroma.demo]

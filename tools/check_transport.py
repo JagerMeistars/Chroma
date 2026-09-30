@@ -46,16 +46,20 @@ def main():
         assert shader == extract_core.transform_position_color(vanilla), rel
         # The fragment shader also serves debug_point. Preserve its exact native
         # vertex interface, color and projected XY; edit only matched depth.
-        assert shader.split('void main() {')[0] == vanilla.split('void main() {')[0]
-        assert shader.replace(extract_core.POSITION_COLOR_BRANCH, '') == vanilla
-        assert 'abs(abs(Position) - vec3(0.3))' in shader
-        assert 'Color.a > 0.999999' in shader
-        assert 'abs(Color.rgb - vec3(Color.r))' in shader
-        assert 'columnScale.x >= 0.1 - 0.000001' in shader
-        assert 'abs(columnScale - vec3(columnScale.x))' in shader
-        assert 'length(ModelViewMat[3].xyz)' not in shader
+        assert shader.replace(extract_core.POSITION_COLOR_BRANCH, '').replace(extract_core.EDITOR_GIZMO_INCLUDE, '') == vanilla
+        assert 'chromaEditorGizmo(Position, Color, false)' in shader
         assert 'gl_Position.z = gl_Position.w;' in shader
         checked.append(rel)
+        for stage in ('vsh', 'fsh'):
+            rel = f'assets/minecraft/shaders/core/rendertype_lines.{stage}'
+            vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+            shader = (args.root / rel).read_text(encoding='utf-8')
+            assert shader == extract_core.transform_lines(vanilla, stage), rel
+            if stage == 'vsh':
+                assert shader.replace(extract_core.LINES_BRANCH, '').replace(extract_core.EDITOR_GIZMO_INCLUDE, '') == vanilla
+            else:
+                assert shader.replace(extract_core.POSITION_COLOR_FRAGMENT_BRANCH, '').replace(extract_core.POSITION_COLOR_FRAGMENT_INCLUDES, '') == vanilla
+            checked.append(rel)
         rel = 'assets/minecraft/shaders/core/position_color.fsh'
         vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
         shader = (args.root / rel).read_text(encoding='utf-8')

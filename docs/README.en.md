@@ -37,7 +37,7 @@ Use a command block if the command is too long for chat; omit the leading `/` th
 
 Every model can be reused by multiple sources, including coincident sources. Colour, position, radius, brightness and direction remain independent. The numbered model names from the earlier pack are retained only as compatibility aliases; their numbers no longer allocate lighting slots.
 
-Spotlights follow the display's rotation. Set `left_rotation:[0.7071068f,0f,0f,0.7071068f]` to point a spotlight down (positive 90° around X). A negative X quaternion points it up. Domes always face world-down, regardless of display rotation. Glow uses a spherical approximation for every shape.
+Spotlights follow the display's rotation. Set `left_rotation:[0.7071068f,0f,0f,0.7071068f]` to point a spotlight down (positive 90° around X). A negative X quaternion points it up. Domes always face world-down, regardless of display rotation. Auto's glow uses a spherical approximation for every shape; the shadow editions omit it.
 
 All dome lights flicker gently. Their phase is derived from colour, so automatic collection order does not change it. Point lights and spotlights are steady. To disable dome flicker, set `CHROMA_FLICKER_AMOUNT` to `0.0` in `assets/chroma/shaders/include/flicker.glsl`, then reload the pack.
 
@@ -56,7 +56,7 @@ These commands select the nearest warm demo light. Tags are ordinary command sel
 # Move above your position
 /tp @e[type=minecraft:item_display,tag=chroma.demo.warm,sort=nearest,limit=1] ~ ~2 ~
 # Remove only the demo sources in this dimension
-/kill @e[type=minecraft:item_display,tag=chroma.demo]
+/kill @e[type=minecraft:item_display,distance=0..,tag=chroma.demo]
 ```
 
 Removing the entity turns its light off when that change reaches the rendered frame. The new renderer does not retain old lamp data for a grace period. Keep both X/Y scales positive; to switch off a light, remove its entity instead of collapsing its model.
@@ -71,6 +71,19 @@ Removing the entity turns its light off when that change reaches the rendered fr
 
 A test datapack is installed in the `objCubed` save at `datapacks/chroma_test_128`. After enabling/reloading Chroma with **F3+T**, run `/reload` once in the world, then `/function chroma_test:spawn128`. It clears its own previous test lights and spawns a 16 × 8 grid around the command position. Cleanup: `/function chroma_test:clear128`.
 
+## Flashlight test
+
+The optional flashlight datapack is installed in `objCubed`. For another world, copy `datapacks/chroma_flashlight` from this project, or place `Chroma-Flashlight-Test-26.3.zip` in the world's `datapacks` folder. The flashlight counts towards the 128-source budget. Enable one Chroma RP, then run these commands in player chat:
+
+```mcfunction
+/reload
+/function chroma_flashlight:start
+```
+
+Stop with `/function chroma_flashlight:stop` before removing the datapack. Starting replaces the previous test owner: this is **one active flashlight**, not a multiplayer equipment system. It creates one white medium spotlight, radius 16 and intensity 0.3, at the player's eyes plus 0.15 blocks forward. Every tick it copies the player's yaw/pitch; `teleport_duration:1` smooths position and rotation. Server eye height follows crouching and swimming. Tick updates cannot exactly follow each rendered camera frame or view bob, so some aim lag during fast turns is expected. The small forward offset can put the source inside a wall when pressed against it, where shadows correctly block it.
+
+The test cleans only its own `chroma.flashlight` entities in the three vanilla dimensions, including lamps left by dimension changes or disconnected owners once their chunks are loaded. The current owner resumes on reconnect until stopped or replaced. To test movement, walk, sprint, crouch, jump, look vertically and turn through the ±180° yaw boundary. Console/test tools must invoke it as a player, for example `execute as @p run function chroma_flashlight:start`. This optional command driver does not change the RP's rendering requirements.
+
 ## How the new renderer works
 
 The marker's texture identifies its shape; tint and transformed geometry provide the other light parameters. The renderer takes the marker's current-frame vertex address, writes its data into a sparse GPU catalogue, counts valid entries and compacts them into a working list of up to 128 sources. Users do not supply addresses. This is not random hashing, and unrelated colours do not compete for a shared hand-assigned slot.
@@ -83,9 +96,9 @@ A `128 × 72` grid stores which sources can affect each screen tile. Each tile u
 - **Sources must be rendered.** Chunk loading, server entity tracking, view distance and renderer culling still apply. The example's zero display width/height and increased view range help, but do not make unloaded entities visible to shaders.
 - **No light:** test the exact first command near a pale, textured floor with only Chroma enabled. Keep the marker's X/Y scales positive. A paper item in inventory/hand is the intended fallback, not a placed source.
 - **Occlusion depends on the edition.** Auto passes through walls. Dynamic can shadow cached, previously observed geometry inside its moving 64-block window; unseen geometry or unseen edits are unknown. Removing every lamp does not clear its geometry cache; **F3+T** does. Static shadows use only exported geometry and bounds, including off-camera blockers; re-export after block changes. See [shadow limits](SHADOWS.md). Block-light levels, mob spawning and other mechanics remain unchanged.
-- **Shadows affect direct surface light.** The weak existing analytic glow is unshadowed and can bleed through blockers. To disable it, set `VOL_STRENGTH` to `0.0` in `assets/chroma/shaders/post/shade.fsh`, then rebuild/reload.
+- **Shadows affect direct surface light.** Dynamic and Static omit analytic glow because it passed through opaque walls. Only Auto retains that glow; in Auto, `VOL_STRENGTH=0.0` in `assets/chroma/shaders/post/shade.fsh` disables it after rebuilding/reloading.
 - **Hands and HUD keep vanilla lighting.** In shadow editions, the actual pixels covered by first-person hands/held items and the separate 3D-HUD pass are excluded from Chroma shading and voxel observations. They do not become world blockers. The surrounding world remains eligible; there is no fixed screen rectangle excluded. The ordinary 2D GUI stays unchanged.
 - **Performance depends on overlap and resolution.** Widely separated sources benefit most from tile culling. If all 128 affect the same pixels, those pixels still evaluate all 128; shadows add map updates and filtering. See [Auto validation](VALIDATION.md) and the separate [shadow results](SHADOW_VALIDATION.md) for measured conditions; neither is a universal FPS promise.
-- **Transparent surfaces and depth edges** may show screen-space approximations. Fog can be reduced with `FOG_DENSITY`/`FOG_SKY`, and glow with `VOL_STRENGTH`, in `assets/chroma/shaders/post/shade.fsh`.
+- **Transparent surfaces and depth edges** may show screen-space approximations. In `assets/chroma/shaders/post/shade.fsh`, `FOG_DENSITY`/`FOG_SKY` control fog in every edition; `VOL_STRENGTH` controls glow only in Auto.
 - **Transport has a finite address space.** The sparse catalogue supports up to 65,536 raw vertex addresses, further bounded by the rendered image size. This is an internal transport bound, not a number to assign to lamps. Very small render sizes or unusually heavy visible model geometry can exceed it. The old 576-pixel-height requirement is gone; a 320 × 240 frame has approximately 6,240 raw addresses. Reduce visible model complexity or increase render resolution if this bound is reached.
 - **Reload errors/conflicts:** inspect `minecraft/logs/latest.log`; test Chroma alone first. Render-altering mod compatibility requires separate verification.

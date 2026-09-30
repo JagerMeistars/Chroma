@@ -141,24 +141,12 @@ FRAGMENT_BRANCH = """
 """
 
 POSITION_COLOR_BRANCH = """
-    // Known Axiom 6.1.2 CENTER_BOX mesh: local corners at +/-0.3 and uniform
-    // scale >= 0.1, opaque grayscale vertex colors (tint is ColorModulator).
-    // Its 50 ms position interpolation can differ from the scale's
-    // target distance, so do not compare scale with camera distance. This covers
-    // this editor mesh only; upstream mesh changes need a new signature.
-    if (ProjMat[2][3] != 0.0 &&
-        Color.a > 0.999999 &&
-        all(lessThan(abs(Color.rgb - vec3(Color.r)), vec3(0.000001))) &&
-        all(lessThan(abs(abs(Position) - vec3(0.3)), vec3(0.000001)))) {
-        vec3 columnScale = vec3(length(ModelViewMat[0].xyz),
-                                length(ModelViewMat[1].xyz),
-                                length(ModelViewMat[2].xyz));
-        if (columnScale.x >= 0.1 - 0.000001 &&
-            all(lessThan(abs(columnScale - vec3(columnScale.x)),
-                         vec3(max(0.000001, columnScale.x * 0.0001)))))
-            gl_Position.z = gl_Position.w; // Existing non-world/HUD depth sentinel.
-    }
+    if (chromaEditorGizmo(Position, Color, false))
+        gl_Position.z = gl_Position.w; // Existing non-world/HUD depth sentinel.
 """
+
+EDITOR_GIZMO_INCLUDE = '#include <chroma:editor_gizmo.glsl>\n'
+LINES_BRANCH = POSITION_COLOR_BRANCH.replace('Color, false', 'Color, true')
 
 POSITION_COLOR_FRAGMENT_INCLUDES = """#include <minecraft:globals.glsl>
 #include <minecraft:projection.glsl>
@@ -166,7 +154,7 @@ POSITION_COLOR_FRAGMENT_INCLUDES = """#include <minecraft:globals.glsl>
 """
 
 POSITION_COLOR_FRAGMENT_BRANCH = """
-    // The matched editor cube uses depth 1, but Axiom's ALWAYS_PASS draw can
+    // Matched editor handles use depth 1, but Axiom's ALWAYS_PASS draw can
     // still overwrite Chroma's colour packets. Reserve transport pixels for
     // this overlay without changing the shared debug_point varying interface.
     if (gl_FragCoord.z == 1.0 && ProjMat[2][3] != 0.0) {
@@ -210,7 +198,7 @@ def transform(vanilla: str, stage: str) -> str:
 
 
 def transform_position_color(vanilla: str, stage: str = 'vsh') -> str:
-    """Keep the native interface/color/XY and mark only Axiom's center overlay."""
+    """Keep the native interface/color/XY and mark matched editor overlays."""
     if stage == 'fsh':
         anchor = '#include <minecraft:oit.glsl>\n'
         assert vanilla.count(anchor) == 1
@@ -218,9 +206,17 @@ def transform_position_color(vanilla: str, stage: str = 'vsh') -> str:
         anchor = 'void main() {'
         assert shader.count(anchor) == 1
         return shader.replace(anchor, anchor + POSITION_COLOR_FRAGMENT_BRANCH)
-    assert vanilla.count('vertexColor = Color;') == 1
-    end = vanilla.rfind('}')
-    return vanilla[:end] + POSITION_COLOR_BRANCH + vanilla[end:]
+    shader = vanilla.replace('#include <minecraft:projection.glsl>\n',
+        '#include <minecraft:projection.glsl>\n' + EDITOR_GIZMO_INCLUDE)
+    assert shader.count('vertexColor = Color;') == 1
+    end = shader.rfind('}')
+    return shader[:end] + POSITION_COLOR_BRANCH + shader[end:]
+
+
+def transform_lines(vanilla: str, stage: str) -> str:
+    if stage == 'fsh':
+        return transform_position_color(vanilla, stage)
+    return transform_position_color(vanilla).replace(POSITION_COLOR_BRANCH, LINES_BRANCH)
 
 
 def write_position_color(jar: ZipFile, output: Path) -> None:
@@ -267,6 +263,11 @@ def main():
         write_position_color(jar, args.output)
         print('assets/minecraft/shaders/core/position_color.vsh')
         print('assets/minecraft/shaders/core/position_color.fsh')
+        for stage in ('vsh', 'fsh'):
+            rel = f'assets/minecraft/shaders/core/rendertype_lines.{stage}'
+            shader = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+            (args.output / rel).write_text(transform_lines(shader, stage), encoding='utf-8', newline='\n')
+            print(rel)
         write_screen_overlay(jar, args.output)
         print('assets/minecraft/shaders/core/position_tex_color.fsh')
 

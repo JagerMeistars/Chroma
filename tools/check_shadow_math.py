@@ -256,7 +256,7 @@ def weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_rad
     return float(depth>=reference_depth-.02),1.0
 
 
-def refined_depth(ray,light,radius,n,fetch,occupied,camera=(0,0,0)):
+def refined_depth(ray,light,radius,n,fetch,occupied,camera=(0,0,0),legacy_observed_faces=False):
     """Mirror only the face reconstruction; fetch/occupancy are independent oracles."""
     block = tuple(math.floor(v) for v in camera)
     offset = sub(block,camera)
@@ -272,11 +272,16 @@ def refined_depth(ray,light,radius,n,fetch,occupied,camera=(0,0,0)):
         if depth>=radius-.001: continue
         sampled_ray = oct_ray(pixel,n)
         hit = add(local_light,mul(sampled_ray,depth))
-        face = tuple(round(v*4) for v in hit)
+        if legacy_observed_faces:
+            face = tuple(round(v*4) for v in hit)
+        else:
+            inside = add(local_light,mul(sampled_ray,depth+.0001))
+            cell = tuple(math.floor(v*4) for v in inside)
+            face = tuple(c+int(d<0) for c,d in zip(cell,ray))
         plane = mul(face,.25)
         for axis in range(3):
-            if (abs(hit[axis]-plane[axis])>.002 or abs(sampled_ray[axis])<1e-6
-                    or abs(ray[axis])<1e-6 or seen[axis]==face[axis]): continue
+            if legacy_observed_faces and (abs(hit[axis]-plane[axis])>.002 or abs(sampled_ray[axis])<1e-6): continue
+            if abs(ray[axis])<1e-6 or seen[axis]==face[axis]: continue
             seen[axis] = face[axis]
             t = (plane[axis]-local_light[axis])/ray[axis]
             if t<=0 or t>=nearest: continue
@@ -300,25 +305,66 @@ def shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius):
     return float(depth<0 or depth>=light_radius-.001 or depth>=distance-.02)
 
 
+def seed_blocked(ray,light,normal,surface,distance,bias,seeds,occupied,camera):
+    block = tuple(math.floor(v) for v in camera)
+    offset = sub(block,camera)
+    relative = tuple(f32(v) for v in sub(light,camera))
+    local = sub(relative,offset)
+    seen = [set(),set(),set()]
+    for seed in seeds:
+        for side in (0,1):
+            face = tuple(c+(int(d<0)^side) for c,d in zip(seed,ray))
+            for axis in range(3):
+                if abs(ray[axis])<1e-6 or face[axis] in seen[axis]: continue
+                seen[axis].add(face[axis])
+                t = (face[axis]*.25-local[axis])/ray[axis]
+                if t<=0 or t>=distance-.02 or dot(ray,normal)*t-surface<=bias+.02: continue
+                point = sub(add(relative,mul(ray,t+.0001)),offset)
+                cell = tuple(4*b+math.floor(p*4) for b,p in zip(block,point))
+                if occupied(cell): return True
+    return False
+
+
 def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_footprint=False,receiver_hull_offset=0.0,
-         depth_query=None,sampled_depth=None,legacy_grid=False):
+         depth_query=None,sampled_depth=None,legacy_grid=False,legacy_search=False,legacy_receiver_side=False,
+         seed_occupied=None,seed_camera=None,legacy_local_only=False,legacy_central_four=False):
     hull = add(receiver,mul(normal,receiver_hull_offset))
     sampler = lambda ray: min(analytic_depth(ray,light,hull,normal,boxes),light_radius)
     if sampled_depth is not None: sampler = sampled_depth
     filtered_sampler = depth_query or sampler
-    filter_pcf = grid_weighted_pcf if legacy_grid else weighted_pcf
+    base_filter = grid_weighted_pcf if legacy_grid else weighted_pcf
+    nearest_search = legacy_search or legacy_grid or legacy_footprint
     height = max(dot(sub(light,receiver),normal),0.0)
     surface_plane = dot(sub(receiver,light),normal)
     receiver_bias = min(bias,height*.5)
     delta = sub(add(receiver,mul(normal,receiver_bias)),light)
-    distance,axis = math.sqrt(dot(delta,delta)),unit(delta)
+    distance = math.sqrt(dot(delta,delta))
+    if distance<.05: return 1.0
+    axis = unit(delta)
     center_pixel = tuple(int(v*n) for v in oct_uv(axis))
     center_depth = sampler(oct_ray(center_pixel,n))
     if center_depth <= .0001: return 0.0
     tangent = unit(cross(axis,(0,1,0) if abs(axis[1])<.9 else (1,0,0)))
     bitangent = cross(axis,tangent)
     plane = dot(delta,normal)
+    seeds = []
+    seed_camera = light if seed_camera is None else seed_camera
+    seed_block = tuple(math.floor(v) for v in seed_camera)
+    seed_offset = sub(seed_block,seed_camera)
+    seed_light = sub(tuple(f32(v) for v in sub(light,seed_camera)),seed_offset)
+    if seed_occupied is None:
+        def seed_occupied(cell):
+            point = mul(add(cell,(.5,.5,.5)),.25)
+            return any(all(a<=p<b for a,p,b in zip(low,point,high)) for low,high in boxes)
+
+    def filter_pcf(*args):
+        if (not legacy_local_only and not nearest_search and seed_blocked(args[0],light,normal,
+                surface_plane,distance,receiver_bias,seeds,seed_occupied,seed_camera)):
+            return (0.0,1.0)
+        return base_filter(*args)
+
     blockers = []
+    blocker_weights = []
     search_angle = radius/max(.5,distance*.2)
     texel_footprint = distance*4/n
     search_footprint = distance*search_angle+texel_footprint
@@ -326,22 +372,57 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_
         angle = i*2.39996323
         r = 0 if i==0 else math.sqrt(i/8)*search_angle
         ray = unit(add(axis,add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle)))))
-        cell = tuple(int(v*n) for v in oct_uv(ray))
-        actual_ray = oct_ray(cell,n)
-        depth = sampler(actual_ray)
-        if legacy_footprint:
-            reference_depth = bounded_reference(actual_ray,normal,plane,delta,search_footprint)
+        if nearest_search:
+            cell = tuple(int(v*n) for v in oct_uv(ray))
+            actual_ray = oct_ray(cell,n)
+            depth = center_depth if i==0 else sampler(actual_ray)
+            if legacy_footprint:
+                reference_depth = bounded_reference(actual_ray,normal,plane,delta,search_footprint)
+            else:
+                on_surface = -.02 <= dot(actual_ray,normal)*depth-surface_plane <= receiver_bias+.02
+                reference_depth = None if on_surface else distance-.02
+            if reference_depth is not None and .0001<depth<light_radius-.001 and depth<reference_depth:
+                blockers.append(depth)
+                blocker_weights.append(1.0)
         else:
-            on_surface = -.02 <= dot(actual_ray,normal)*depth-surface_plane <= receiver_bias+.02
-            reference_depth = None if on_surface else distance-.02
-        if reference_depth is not None and .0001<depth<light_radius-.001 and depth<reference_depth:
-            blockers.append(depth)
+            # A normalized tent covers the immediate nine map texels, closing
+            # the gap between central bilinear taps and the eight wider probes.
+            uv = tuple(v*n-.5 for v in oct_uv(ray))
+            base = tuple(math.floor(v) for v in uv)
+            fract = tuple(v-b for v,b in zip(uv,base))
+            middle = tuple(math.floor(v+.5) for v in uv)
+            normalization = math.prod(2.5-abs(v-m) for v,m in zip(uv,middle))
+            offsets = (((0,0),(1,0),(0,1),(1,1)) if legacy_central_four else
+                       ((0,0),(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(1,-1),(-1,1),(1,1)))
+            for x,y in (offsets if i==0 else ((0,0),)):
+                if i!=0:
+                    cell = tuple(int(v*n) for v in oct_uv(ray))
+                    weight = 1.0
+                elif legacy_central_four:
+                    cell = oct_seam((base[0]+x,base[1]+y),n)
+                    weight = (fract[0] if x else 1-fract[0])*(fract[1] if y else 1-fract[1])
+                else:
+                    pixel = (middle[0]+x,middle[1]+y)
+                    cell = oct_seam(pixel,n)
+                    weight = math.prod(max(1.5-abs(v-p),0) for v,p in zip(uv,pixel))/normalization
+                actual_ray = oct_ray(cell,n)
+                depth = sampler(actual_ray)
+                surface_offset = dot(actual_ray,normal)*depth-surface_plane
+                on_surface = (surface_offset<=receiver_bias+.02 if not legacy_receiver_side
+                              else -.02<=surface_offset<=receiver_bias+.02)
+                if not on_surface and .0001<depth<light_radius-.001 and depth<distance-.02 and weight>1e-8:
+                    blockers.append(depth)
+                    blocker_weights.append(weight)
+                    if i==0:
+                        hit = add(seed_light,mul(actual_ray,depth+.0001))
+                        cell = tuple(math.floor(v*4) for v in hit)
+                        if cell not in seeds and len(seeds)<4: seeds.append(cell)
     if not blockers:
         visible,weight = (bounded_pcf(axis,normal,plane,delta,texel_footprint,sampler,n,light_radius)
                           if legacy_footprint else
                           filter_pcf(axis,normal,surface_plane,distance,texel_footprint,filtered_sampler,n,light_radius,receiver_bias,distance))
         return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
-    blocker = sum(blockers)/len(blockers)
+    blocker = sum(v*w for v,w in zip(blockers,blocker_weights))/sum(blocker_weights)
     penumbra = radius*max(distance-blocker,0)/max(distance*blocker,.01)
     filter_angle = max(penumbra,.7/n)
     footprint = distance*filter_angle+texel_footprint
@@ -371,11 +452,25 @@ def check_octahedral(rng,radius):
     assert 'floatreceiverBias=min(bias,height*0.5);receiver+=normal*receiverBias;' in source
     assert 'returnvisible.y>0.00001?visible.x/visible.y:chromaShadowFallback(lamp,axis,normal,plane,distance,lightRadius);' in source
     assert 'if(centerDepth<=0.0001)return0.0;' in source
-    assert '!chromaShadowReceiverHit(surfaceOffset,receiverBias)&&depth>0.0001&&depth<lightRadius-0.001&&depth<distance-0.02' in source
+    assert 'surfaceOffset>receiverBias+0.02&&depth>0.0001&&depth<lightRadius-0.001&&depth<distance-0.02' in source
     assert 'ivec2pixel=base+ivec2(i&1,i>>1);' in source
-    assert 'ivec3face=ivec3(round(hit*float(CHROMA_VOX_CELLS)));' in source
+    assert 'vec3hit=localLight+sampledDirection*(depth+0.0001);' in source
+    assert 'ivec3hitCell=ivec3(floor(hit*float(CHROMA_VOX_CELLS)));' in source
+    assert 'ivec3face=hitCell+ivec3(lessThan(direction,vec3(0.0)));' in source
+    assert 'abs(hit[axis]-plane[axis])' not in source
     assert 'if(chromaVoxConfidence(VoxelSampler,cell)>=2u)nearest=t;' in source
     assert 'floatdepth=chromaShadowRayDepth(lamp,direction,light,lightRadius);' in source
+    assert 'floatcenterDepth=chromaShadowDepth(lamp,centerPixel);' in source
+    assert 'for(intj=0;j<(i==0?9:1);++j)' in source
+    assert 'vec2normalization=2.5-abs(p-vec2(middle));' in source
+    assert 'floatweight=i==0?weights.x*weights.y/(normalization.x*normalization.y):1.0;' in source
+    assert 'if(weight<=0.00000001)continue;' in source
+    assert 'floatsurfaceOffset=dot(chromaShadowDirection(pixel),normal)*depth-surfacePlane;' in source
+    assert 'blockerSum+=depth*weight;blockers+=weight;' in source
+    assert 'if(i==0){ivec3cell=ivec3(floor((light-CameraOffset' in source
+    assert 'if(!duplicate&&seedCount<4)seedCells[seedCount++]=cell;' in source
+    assert 't<=0.0||t>=distance-0.02||dot(direction,normal)*t-surfacePlane<=receiverBias+0.02' in source
+    assert 'receiverBias,seedCount,seedCells))returnvec2(0.0,1.0);' in source
     # Fold every possible bilinear seam/corner neighbour inside its source tile.
     for x in range(-1,n+1):
         for y in (-1,0,n-1,n):
@@ -670,6 +765,93 @@ def check_captured_room_contour(radius):
     return old,new
 
 
+def check_moving_source_search(radius):
+    """Replay a non-startup live pair, then move smoothly in .002-block steps.
+
+    At t5.3175301->5.3371349 the source moved .00718 blocks, while the nearest
+    centre texel changed from the front wall to empty. Refining the search must
+    keep that real blocker; sixteen binary coverage samples still have steps.
+    """
+    boxes = [
+        ((-8,-61,-47),(68,-60,25)), ((9,-60,-2),(13,-56,-1)),
+        ((9,-60,3),(13,-56,4)), ((8,-60,-1),(9,-56,1)),
+        ((8,-60,2),(9,-56,3)), ((13,-60,-1),(14,-56,3)),
+        ((8,-58,1),(9,-56,2)), ((9,-56,-1),(13,-55,3)),
+    ]
+    point,normal = (9,-57.96875,-1.65625),(-1,0,0)
+    camera = (.14674958,-58.38,-2.51152597)
+    sources = ((4.038475120161133,-57.517299537658694,2.7085982746899413),
+               (4.034779632185058,-57.52127212762833,2.703914303284912))
+    sequences = [[],[]]
+    raw_centres,refined_centres = [],[]
+    for frame in range(101):
+        light = tuple(a+(b-a)*frame/100 for a,b in zip(*sources))
+        fetch,occupied,raw = box_atlas(light,boxes,128,35.5)
+        query = lambda ray: refined_depth(ray,light,35.5,128,fetch,occupied,camera)
+        for old in (0,1):
+            value = pcss(point,normal,light,boxes,128,radius,35.5,.18,
+                         depth_query=query,sampled_depth=raw,legacy_search=bool(old))
+            sequences[old].append(value)
+        if frame in (0,100):
+            axis = unit(sub(add(point,mul(normal,.18)),light))
+            raw_centres.append(raw(axis))
+            refined_centres.append(query(axis))
+    assert raw_centres[0]<10 and raw_centres[1]==35.5, 'Fixture must expose the lost nearest-texel blocker'
+    assert max(refined_centres)<10 and abs(refined_centres[0]-refined_centres[1])<.01
+    current,old = sequences
+    assert old[0]==0 and old[-1]>=2/16
+    assert abs(current[-1]-current[0])<=1/16 and max(current)<=1/16
+    remaining_step = max(abs(a-b) for a,b in zip(current,current[1:]))
+    assert remaining_step<=1/16+1e-8
+
+    points = [(9,-58,z) for z in (-2,-1.98,-1.96,-1.94,-1.92,-1.90,-1.88,-1.86,-1.84,-1.8,-1.7,-1.5)]
+    previous = None
+    sweep_step = 0.0
+    for frame in range(101):
+        light = (4.2125+frame*.002,-57.625,2.875)
+        fetch,occupied,raw = box_atlas(light,boxes,128,35.5)
+        query = lambda ray: refined_depth(ray,light,35.5,128,fetch,occupied,camera)
+        values = [pcss(p,normal,light,boxes,128,radius,35.5,.18,
+                       depth_query=query,sampled_depth=raw) for p in points]
+        if previous is not None:
+            sweep_step = max(sweep_step,max(abs(a-b) for a,b in zip(previous,values)))
+        previous = values
+    assert sweep_step<=1/16+1e-8
+
+    # A real floor pixel under a one-block post changed G40->192 while its lamp
+    # moved 0.0068 blocks. Two map rays still hit the post in both frames, but
+    # one hit moves from x=5.251971 to 5.252035: the former 2 mm near-face test
+    # then drops the actual x=5.25 entry face for seven PCF rays at once.
+    post = [((5.25,-60,-1.75),(5.5,-59,-1.5)),
+            ((5.25,-59.75,-1.5),(5.5,-59.5,-1.25)),
+            ((5.25,-59.25,-1.5),(5.5,-59,-1.25))]
+    floor_point,floor_normal = (5.53125,-60,-2.71875),(0,1,0)
+    floor_sources = ((4.17865761527832,-57.91597360849381,2.58413471649292),
+                     (4.1843276859265135,-57.918457036018374,2.587158817750244))
+    floor_sequences = [[],[]]
+    for frame in range(101):
+        light = tuple(a+(b-a)*frame/100 for a,b in zip(*floor_sources))
+        fetch,occupied,raw = box_atlas(light,boxes+post,128,35.5)
+        for old_faces in (0,1):
+            query = lambda ray: refined_depth(ray,light,35.5,128,fetch,occupied,camera,
+                                              legacy_observed_faces=bool(old_faces))
+            floor_sequences[old_faces].append(pcss(floor_point,floor_normal,light,boxes+post,
+                128,radius,35.5,.18,depth_query=query,sampled_depth=raw,
+                seed_camera=camera,legacy_local_only=bool(old_faces),legacy_central_four=bool(old_faces)))
+    floor_new,floor_old = floor_sequences
+    floor_old_step = max(abs(a-b) for a,b in zip(floor_old,floor_old[1:]))
+    floor_new_step = max(abs(a-b) for a,b in zip(floor_new,floor_new[1:]))
+    assert floor_old_step>=7/16, 'Fixture must expose simultaneous loss of post side-face rays'
+    assert floor_new_step<=1/16 and max(floor_new)<.5
+    # Independent source-segment integration confirms this is a partial shadow
+    # in both frames, not an actual light/dark transition in the scene.
+    oracle = [sum(not reference(add(floor_point,(0,.00001,0)),source,boxes+post)
+                  for source in samples(floor_point,light,4096,radius))/4096
+              for light in floor_sources]
+    assert all(.1<v<.3 for v in oracle) and abs(oracle[1]-oracle[0])<.02
+    return old[-1]-old[0],abs(current[-1]-current[0]),remaining_step,sweep_step,floor_old_step,floor_new_step
+
+
 def check_receiver_hull(radius):
     """A rounded voxel surface inside the applied bias is still a clear floor.
 
@@ -699,6 +881,138 @@ def check_receiver_hull(radius):
                 value = pcss(receiver,(0,1,0),light,boxes,n,radius,40,bias)
                 assert value<1e-12, ('Parallel near-receiver slab leaked',bottom,top,distance,bias,value)
     return count
+
+
+def check_underfloor_blockers():
+    """Replay native maps: a voxel side behind the floor is not its blocker."""
+    fixture = json.loads((ROOT/'tools/fixtures/shadow_underfloor.json').read_text())
+    sequences = [[],[]]
+    for frame in fixture['frames']:
+        pixels = {(x,y):depth for x,y,depth in frame['map']}
+        cells = {(x,y,z):bool(value) for x,y,z,value in frame['cells']}
+        fetch = lambda pixel: pixels[oct_seam(pixel,128)]
+        occupied = lambda cell: cells[tuple(cell)]
+        raw = lambda ray: fetch(tuple(int(v*128) for v in oct_uv(ray)))
+        query = lambda ray: refined_depth(ray,frame['light'],fixture['radius'],128,
+                                         fetch,occupied,fixture['camera'])
+        for legacy in (0,1):
+            value = pcss(fixture['receiver'],fixture['normal'],frame['light'],[],128,
+                         fixture['sourceSize'],fixture['radius'],fixture['bias'],
+                         depth_query=query,sampled_depth=raw,legacy_receiver_side=bool(legacy),
+                         seed_occupied=occupied,seed_camera=fixture['camera'],legacy_local_only=bool(legacy),
+                         legacy_central_four=bool(legacy))
+            expected = frame['legacyVisibility' if legacy else 'tentVisibility']
+            assert abs(value-expected)<1e-12, (frame['label'],legacy,value,expected)
+            sequences[legacy].append(value)
+    current,old = sequences
+    assert abs(old[1]-old[0])>=.5
+    assert abs(current[1]-current[0])<=1/16
+
+    # Independent geometry: all source-to-receiver segments stop at y=0.
+    # A broad search ray can nevertheless hit an underground voxel at distance
+    # 2.05 < the receiver distance10.2. Radial distance alone is insufficient.
+    receiver,light = (0,0,10),(0,2,0)
+    underground = [((-10,-.25,-10),(10,-.05,10))]
+    assert all(not reference(receiver,source,underground)
+               for source in samples(receiver,light,128,.35))
+    near,far = interval(light,(0,-1,0),*underground[0])
+    assert 0<near<math.sqrt(dot(sub(receiver,light),sub(receiver,light)))
+    assert near<far and add(light,mul((0,-1,0),near))[1]<receiver[1]
+    return abs(old[1]-old[0]),abs(current[1]-current[0])
+
+
+def check_shared_blockers():
+    """A shared post cell supplies its rear boundary to neighbouring PCF rays."""
+    boxes = [((-8,-61,-47),(68,-60,25)),
+             ((5.25,-60,-1.75),(5.5,-59,-1.5)),
+             ((5.25,-59.75,-1.5),(5.5,-59.5,-1.25)),
+             ((5.25,-59.25,-1.5),(5.5,-59,-1.25))]
+    camera = (.14674958,-58.38,-2.51152597)
+    point,normal = (5.40625,-60,-2.53125),(0,1,0)
+    sources = ((4.4218788982373045,-57.303488140106204,3.072667736512451),
+               (4.415360534284668,-57.30543601989746,3.0675274319470214))
+    sequences = [[],[]]
+    for frame in range(101):
+        light = tuple(a+(b-a)*frame/100 for a,b in zip(*sources))
+        fetch,occupied,raw = box_atlas(light,boxes,128,35.5)
+        query = lambda ray: refined_depth(ray,light,35.5,128,fetch,occupied,camera)
+        for old in (0,1):
+            value = pcss(point,normal,light,boxes,128,.35,35.5,.18,
+                         depth_query=query,sampled_depth=raw,seed_occupied=occupied,
+                         seed_camera=camera,legacy_local_only=bool(old),legacy_central_four=bool(old))
+            sequences[old].append(value)
+    current,old = sequences
+    old_step = max(abs(a-b) for a,b in zip(old,old[1:]))
+    new_step = max(abs(a-b) for a,b in zip(current,current[1:]))
+    assert abs(old[0]-old[-1])>=4/16
+    assert new_step<=1/16 and all(.1<v<.6 for v in current)
+
+    # Independent interval intersections verify every early return is a real
+    # occupied intersection before the endpoint, including planes extrapolated
+    # well outside the seed cell. Quarter-aligned boxes match the voxel ABI.
+    rng = random.Random(26357)
+    checks = 0
+    for shift in (0,29_999_900,-29_999_900):
+        translation = (shift,0,-shift)
+        light = add((-3,2,-4),translation)
+        receiver = add((0,0,8),translation)
+        cam = add((.125,1.75,-2.25),translation)
+        camera_block = tuple(math.floor(v) for v in cam)
+        delta = sub(add(receiver,(0,.18,0)),light)
+        distance = math.sqrt(dot(delta,delta))
+        plane = receiver[1]-light[1]
+        scene = [(add((-1,-1,0),translation),add((1,3,.5),translation))]
+        _,occupied,_ = box_atlas(light,scene,128,35.5)
+        seeds = [tuple(4*(v-b) for v,b in zip(c,camera_block))
+                 for c in (add((-1,0,0),translation),add((0,1,0),translation))]
+        for _ in range(128):
+            ray = unit(add(delta,(rng.uniform(-4,4),rng.uniform(-1,1),0)))
+            if seed_blocked(ray,light,(0,1,0),plane,distance,.18,seeds,occupied,cam):
+                assert reference(add(light,mul(ray,distance)),light,scene)
+            checks += 1
+    return old_step,new_step,checks
+
+
+def check_local_search_gap():
+    """A post one texel beyond the central bilinear square must remain visible."""
+    boxes = [((-8,-61,-47),(68,-60,25)),
+             ((5.25,-60,-1.75),(5.5,-59,-1.5)),
+             ((5.25,-59.75,-1.5),(5.5,-59.5,-1.25)),
+             ((5.25,-59.25,-1.5),(5.5,-59,-1.25))]
+    camera = (.14674958,-58.38,-2.51152597)
+    point,normal = (5.40625,-60,-2.59375),(0,1,0)
+    sources = ((4.3397489429455565,-57.331043844223025,3.0061260647595214),
+               (4.334180915449219,-57.33319247245789,3.001439232331543),
+               (4.327409827802734,-57.335862998962405,2.995814938050537))
+
+    def evaluate(light,old=False):
+        fetch,occupied,raw = box_atlas(light,boxes,128,35.5)
+        query = lambda ray: refined_depth(ray,light,35.5,128,fetch,occupied,camera)
+        return pcss(point,normal,light,boxes,128,.35,35.5,.18,depth_query=query,
+                    sampled_depth=raw,seed_occupied=occupied,seed_camera=camera,legacy_central_four=old)
+
+    old = [evaluate(light,True) for light in sources]
+    assert old[1]==1 and old[0]<.7 and old[2]<.7, 'Fixture must expose the missing local search ring'
+    current = [evaluate(tuple(a+(b-a)*i/100 for a,b in zip(sources[0],sources[-1]))) for i in range(101)]
+    step = max(abs(a-b) for a,b in zip(current,current[1:]))
+    assert step<=1/16 and all(.3<v<.8 for v in current)
+    # The square changes membership at half-integer phase. Its outgoing and
+    # incoming samples have zero tent weight there; retained absolute texel
+    # weights are continuous. Binary PCF coverage still has finite steps.
+    phase_delta = 0.0
+    for y in (-.5,-.2,0,.25,.5):
+        states = []
+        for x in (.5-1e-7,.5+1e-7):
+            middle = (math.floor(x+.5),math.floor(y+.5))
+            total = (2.5-abs(x-middle[0]))*(2.5-abs(y-middle[1]))
+            weights = {(a,b):max(1.5-abs(x-a),0)*max(1.5-abs(y-b),0)/total
+                       for a in range(middle[0]-1,middle[0]+2) for b in range(middle[1]-1,middle[1]+2)}
+            assert abs(sum(weights.values())-1)<1e-12
+            states.append(weights)
+        phase_delta = max(phase_delta,max(abs(states[0].get(p,0)-states[1].get(p,0))
+                                         for p in states[0].keys()|states[1].keys()))
+    assert phase_delta<1e-6
+    return old[1]-old[0],step,phase_delta
 
 
 def main():
@@ -759,6 +1073,10 @@ def main():
     hulls = check_receiver_hull(radius)
     faces = check_face_refinement()
     room_contour = check_captured_room_contour(radius)
+    moving_search = check_moving_source_search(radius)
+    underfloor = check_underfloor_blockers()
+    shared = check_shared_blockers()
+    search_gap = check_local_search_gap()
     print(f'PASS: {tested} ray/camera/large-coordinate comparisons; penumbra widths '
           f'{widths[0]:.3f}->{widths[1]:.3f}; bounded traversal checked; '
           f'octahedral seams and {floors} unoccluded planes stay lit '
@@ -776,6 +1094,17 @@ def main():
           'stale-map/empty-volume rejection, occupied-source/range sentinels and both RP volume bindings')
     print(f'PASS: actual room 10% contour span {room_contour[0][0]:.3f}->{room_contour[1][0]:.3f} blocks, '
           f'maximum adjacent step {room_contour[0][1]:.3f}->{room_contour[1][1]:.3f}')
+    print(f'PASS: moving-source pair visibility change {moving_search[0]:.4f}->{moving_search[1]:.4f}, '
+          'centre blocker stays continuous; remaining16-sample step '
+          f'{moving_search[2]:.4f}; .002-block/101-position sweep step {moving_search[3]:.4f}')
+    print(f'PASS: moving-source thin-post floor jump {moving_search[4]:.4f}->{moving_search[5]:.4f}; '
+          '101 positions retain true voxel side faces instead of a 2 mm candidate-plane cutoff')
+    print(f'PASS: captured underfloor-blocker visibility jump {underfloor[0]:.4f}->{underfloor[1]:.4f}; '
+          'source-side selection excludes geometry beyond the receiving surface')
+    print(f'PASS: shared post-cell visibility step {shared[0]:.4f}->{shared[1]:.4f}; '
+          f'{shared[2]} independent early-occlusion/large-coordinate comparisons')
+    print(f'PASS: missing central-ring visibility flash {search_gap[0]:.4f}->{search_gap[1]:.4f}; '
+          f'101 source positions and normalized tent phase delta {search_gap[2]:.2g}')
 
 
 if __name__ == '__main__':

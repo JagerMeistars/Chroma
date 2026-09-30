@@ -42,8 +42,16 @@ public class CheckExamples {
         var source = Commands.createCompilationContext(PermissionSet.ALL_PERMISSIONS);
         var results = new ArrayList<Map<String, Object>>();
         var errors = new ArrayList<String>();
-        int commands = 0, summons = 0, modifications = 0, downwardSpots = 0;
-        for (String file : List.of("docs/examples.mcfunction", "docs/examples-128.mcfunction", "docs/README.en.md", "docs/README.ru.md")) {
+        int commands = 0, summons = 0, modifications = 0, downwardSpots = 0, flashlightDirections = 0, scopedFlashlightSelectors = 0;
+        var files = new ArrayList<>(List.of("docs/examples.mcfunction", "docs/examples-128.mcfunction", "docs/README.en.md", "docs/README.ru.md"));
+        Path datapacks = root.resolve("datapacks");
+        if (Files.isDirectory(datapacks)) {
+            try (var paths = Files.walk(datapacks)) {
+                paths.filter(p -> p.toString().endsWith(".mcfunction")).sorted()
+                    .forEach(p -> files.add(root.relativize(p).toString().replace('\\', '/')));
+            }
+        }
+        for (String file : files) {
             CompoundTag warmExample = null;
             var fixtureModels = new HashSet<String>();
             int fixtureSources = 0;
@@ -57,11 +65,23 @@ public class CheckExamples {
                 String location = file + ":" + (i + 1);
                 try {
                     CommandFunction.parseCommand(dispatcher, source, new StringReader(command));
+                    if (file.startsWith("datapacks/chroma_flashlight/")) {
+                        var selectors = java.util.regex.Pattern.compile("@e\\[[^\\]]+\\]").matcher(command);
+                        while (selectors.find()) {
+                            var selector = new net.minecraft.commands.arguments.selector.EntitySelectorParser(
+                                new StringReader(selectors.group()), true).parse();
+                            // `execute in` alone does not scope @e: native findEntities
+                            // otherwise scans getAllLevels(), deleting another dimension's lamp.
+                            if (!selector.isWorldLimited())
+                                throw new IllegalArgumentException("Flashlight selector crosses dimensions: " + selectors.group());
+                            scopedFlashlightSelectors++;
+                        }
+                    }
                     commands++;
                     Map<String, Object> detail = new LinkedHashMap<>();
                     detail.put("location", location);
                     detail.put("command_parse", "passed");
-                    if (command.startsWith("summon ")) {
+                    if (command.startsWith("summon ") || command.contains(" run summon minecraft:item_display ")) {
                         CompoundTag nbt = TagParser.parseCompoundFully(command.substring(command.indexOf('{')));
                         CompoundTag item = nbt.getCompoundOrEmpty("item");
                         Item.CODEC.parse(ops, item.get("id")).getOrThrow();
@@ -104,6 +124,28 @@ public class CheckExamples {
                             warmExample = nbt.copy();
                         } else if (command.contains("chroma.demo.blue") && color != 0x66CCFF)
                             throw new IllegalArgumentException("Blue RGB mismatch");
+                        if (file.endsWith("chroma_flashlight/function/update.mcfunction")) {
+                            if (!model.toString().equals("chroma:marker_spot") || color != 0xFFFFFF
+                                    || nbt.getIntOr("teleport_duration", 0) != 1)
+                                throw new IllegalArgumentException("Unexpected flashlight default or interpolation");
+                            // Native DisplayRenderer FIXED uses rotationYXZ(-yaw, pitch, 0).
+                            // Compare the marker axis with Minecraft's view vector, including
+                            // vertical looks and the +/-180 yaw crossing.
+                            for (float yaw : new float[]{-180, -179.9f, -90, 0, 90, 179.9f, 180}) {
+                                for (float pitch : new float[]{-90, -60, 0, 60, 90}) {
+                                    var axis = new org.joml.Vector3f(0, 0, 1)
+                                        .rotate(transformation.rightRotation()).mul(transformation.scale())
+                                        .rotate(transformation.leftRotation()).normalize()
+                                        .rotate(new org.joml.Quaternionf().rotationYXZ(
+                                            -yaw * (float)Math.PI / 180, pitch * (float)Math.PI / 180, 0));
+                                    var expected = net.minecraft.world.phys.Vec3.directionFromRotation(pitch, yaw);
+                                    if (axis.distance((float)expected.x, (float)expected.y, (float)expected.z) > .0003f)
+                                        throw new IllegalArgumentException("Flashlight axis differs from player view: " + yaw + ", " + pitch);
+                                    flashlightDirections++;
+                                }
+                            }
+                            detail.put("player_view_directions", 35);
+                        }
                         detail.put("item_registry_codec", "passed");
                         detail.put("item_component_patch_codec", "passed");
                         detail.put("display_context_codec", "passed");
@@ -146,6 +188,8 @@ public class CheckExamples {
         summary.put("summon_payloads_decoded", summons);
         summary.put("modifications_applied_to_memory_only", modifications);
         summary.put("downward_fixture_spotlights", downwardSpots);
+        summary.put("flashlight_view_directions", flashlightDirections);
+        summary.put("flashlight_dimension_scoped_selectors", scopedFlashlightSelectors);
         summary.put("results", results);
         summary.put("errors", errors);
         summary.put("boundaries", List.of(

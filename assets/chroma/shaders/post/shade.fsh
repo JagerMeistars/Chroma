@@ -143,6 +143,7 @@ void main() {
         if (dot(normal, fragPos) > 0.0) normal = -normal;
     }
     vec3 radiance = vec3(0.0);
+    float reachLum = 0.0;
     float shadowDebug = 1.0;
     vec3 worldReceiver = cameraInvRot * fragPos;
     vec3 worldNormal = cameraInvRot * normal;
@@ -166,6 +167,8 @@ void main() {
         float lRad = max(chromaMdLampRadiusOf(MatDecSampler, k) * RADIUS_GAIN, 0.001);
         int lShape = chromaMdLampShapeOf(MatDecSampler, k);
         float surfaceWeight = 0.0;
+        float unshadowedWeight = 0.0;
+        float visibility = 1.0;
         if (!isSky) {
             vec3 toL = lPos - lightReceiver;
             float dist = length(toL);
@@ -184,6 +187,7 @@ void main() {
                     fall *= smoothstep(0.0, DOME_EDGE, dot(normalize(-toL), cameraDown));
                 }
                 surfaceWeight = LIGHT_STRENGTH * diff * fall;
+                unshadowedWeight = surfaceWeight;
                 if (surfaceWeight > 0.0001) {
                     // Colour and cone shape do not change radial occlusion.
                     // Reuse an exact colocated source; distinct positions stay independent.
@@ -193,7 +197,7 @@ void main() {
                             worldNormal, cameraInvRot * lPos, lRad);
                         previousShadowSource = shadowSource;
                     }
-                    float visibility = previousVisibility;
+                    visibility = previousVisibility;
                     surfaceWeight *= visibility;
                     shadowDebug = min(shadowDebug, visibility);
                 }
@@ -203,6 +207,12 @@ void main() {
         float lInt = max(chromaMdRenderIntensity(MatDecSampler, k) * INTENSITY_GAIN, 0.0);
         vec3 lCol = texelFetch(ColorSampler, ivec2(k, 0), 0).rgb;
         radiance += lCol * (lInt * surfaceWeight);
+        // Saturate each lamp's response before applying shadow coverage. A
+        // bright lamp's first visible sample must not fill the whole penumbra.
+        // RGB still uses actual shadowed energy; fully lit output is unchanged,
+        // and a blocked lamp contributes nothing to another lamp's response.
+        float unshadowedLum = dot(lCol, vec3(0.2125, 0.7154, 0.0721)) * lInt * unshadowedWeight;
+        reachLum += min(unshadowedLum, LOOK_FULL_LUM) * visibility;
     }
 
     float radLum = dot(radiance, vec3(0.2125, 0.7154, 0.0721));
@@ -210,7 +220,7 @@ void main() {
     float reach = 0.0;
     if (radLum > 1e-4) {
         vec3 hueDir = radiance / radLum;
-        float env = smoothstep(0.0, LOOK_FULL_LUM, radLum);
+        float env = smoothstep(0.0, LOOK_FULL_LUM, reachLum);
         outc = albedo * (1.0 + hueDir * LOOK_CORE);
 #if ENABLE_ACES
         vec3 perCh = aces(outc);
