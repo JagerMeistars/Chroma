@@ -24,7 +24,7 @@ def main():
                 vanilla=jar.read(rel).decode('utf-8').replace('\r\n','\n')
                 target=args.output/rel;target.parent.mkdir(parents=True,exist_ok=True)
                 target.write_text(extract_core.transform(vanilla,stage),encoding='utf-8',newline='\n')
-        extract_core.write_terrain(jar, args.output)
+        extract_core.write_position_color(jar,args.output)
     for name,source in TRANSPORT_INCLUDES.items():
         target=args.output/f'assets/chroma/shaders/include/{name}';target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(source,encoding='utf-8',newline='\n')

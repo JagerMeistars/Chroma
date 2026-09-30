@@ -1,8 +1,8 @@
 # Provenance / Происхождение
 
-The shadow branch studied [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) as a reference for persistent voxel observations. Its shadow code was not copied; Chroma's source-distance atlas, filtering and 26.3 world-coordinate transport are implemented here. The hand-depth hook and camera-header guard adapt Minecraft 26.3's own `integrate_depth.fsh` and `terrain.fsh`.
+The shadow branch studied [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) as a reference for persistent voxel observations. Its shadow code was not copied; Chroma's source-distance atlas, filtering and 26.3 world-coordinate transport are implemented here. The hand-depth and editor-overlay hooks adapt Minecraft 26.3's own `integrate_depth.fsh` and `position_color.vsh` / `position_color.fsh`.
 
-В ветке теней [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) использовался как пример накопления наблюдений в вокселях. Код его теней не копировался: карты расстояний от источников, фильтрация и передача координат мира 26.3 реализованы здесь. Правка глубины рук и защита заголовка камеры основаны на штатных `integrate_depth.fsh` и `terrain.fsh` Minecraft 26.3.
+В ветке теней [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) использовался как пример накопления наблюдений в вокселях. Код его теней не копировался: карты расстояний от источников, фильтрация и передача координат мира 26.3 реализованы здесь. Правки глубины рук и редакторского маркера основаны на штатных `integrate_depth.fsh` и `position_color.vsh` / `position_color.fsh` Minecraft 26.3.
 
 The starting point was Chroma's lighting effect and marker assets in the supplied **RPDREVO** resource pack for Minecraft Java Edition 26.3. The first standalone edition removed unrelated map resources and the shadow implementation. This automatic-source edition rewrites marker geometry and data transport, adds GPU catalogue counting and compaction, and rewrites the lighting path around tile masks. It preserves the source effect's visual approach, the five light shapes and the legacy model identifiers; it is not an unchanged extraction of the original shaders.
 

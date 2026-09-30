@@ -103,12 +103,13 @@ void main() {
         ivec2 size = ivec2(ScreenSize);
         ivec2 origin = header ? ivec2(0, size.y - 1) : chromaAutoOrigin(chromaSlot, size);
         vec2 extent = header ? vec2(32.0, 1.0) : vec2(4.0, 2.0);
-        float depth = header ? 0.5 + float(min(chromaSlot, 65535)) / 131072.0 : 1.0;
         vec2 pixel = vec2(origin);
         if (corner == 0) pixel += vec2(0.0, extent.y);
         if (corner == 2) pixel += vec2(extent.x, 0.0);
         if (corner == 3) pixel += extent;
-        gl_Position = vec4(pixel / ScreenSize * 2.0 - 1.0, depth, 1.0);
+        // Reverse-depth near plane: terrain must not hide the camera packet.
+        // Every header writer carries identical camera data and scan bounds.
+        gl_Position = vec4(pixel / ScreenSize * 2.0 - 1.0, 1.0, 1.0);
         if (!header && (chromaSlot < 0 || chromaSlot >= chromaAutoCapacity(size)))
             gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
     }

@@ -173,7 +173,7 @@ def verify_sources(snapshot: dict, expected: list[dict], *, duplicate_identical=
     assert error < .01, ('sources do not share a camera transform', error)
     if duplicate_identical:
         assert np.max(np.ptp(np.asarray([r['eye'] for r in found]), axis=0)) < .001, 'Identical entities did not decode at the same position'
-    return matched, {'count': len(found), 'catalog_count': int(snapshot['u'][42]), 'max_address': int(snapshot['u'][43]),
+    return matched, {'count': len(found), 'catalog_count': int(snapshot['u'][42]), 'address_scan_bound': int(snapshot['u'][43]),
                      'addresses': sorted(r['address'] for r in found), 'position_error_blocks': error,
                      'capture': str(snapshot['folder'].relative_to(ROOT)),
                      'models': sorted({SHAPES[lamp['shape']] for lamp in expected})}

@@ -1,7 +1,7 @@
 """Rebuild Chroma core hooks from exact Minecraft 26.3 vanilla shaders.
 
-Generated files retain GLSL 330 and vanilla branches. This writes only item/entity
-vertex/fragment shaders and the terrain header guard; no post effects are changed.
+Generated files retain GLSL 330 and vanilla branches. This writes item/entity
+hooks and a position_color editor-overlay guard; no terrain/post shaders change.
 """
 from argparse import ArgumentParser
 from pathlib import Path
@@ -54,20 +54,21 @@ VERTEX_BRANCH = """
         ivec2 size = ivec2(ScreenSize);
         ivec2 origin = header ? ivec2(0, size.y - 1) : chromaAutoOrigin(chromaSlot, size);
         vec2 extent = header ? vec2(32.0, 1.0) : vec2(4.0, 2.0);
-        float depth = header ? 0.5 + float(min(chromaSlot, 65535)) / 131072.0 : 1.0;
         vec2 pixel = vec2(origin);
         if (corner == 0) pixel += vec2(0.0, extent.y);
         if (corner == 2) pixel += vec2(extent.x, 0.0);
         if (corner == 3) pixel += extent;
-        gl_Position = vec4(pixel / ScreenSize * 2.0 - 1.0, depth, 1.0);
+        // Reverse-depth near plane: terrain must not hide the camera packet.
+        // Every header writer carries identical camera data and scan bounds.
+        gl_Position = vec4(pixel / ScreenSize * 2.0 - 1.0, 1.0, 1.0);
         if (!header && (chromaSlot < 0 || chromaSlot >= chromaAutoCapacity(size)))
             gl_Position = vec4(2.0, 2.0, 1.0, 1.0);
     }
 """
 
 FRAGMENT_HELPER = """
-// A shared header carries the current camera. Reverse depth arbitrates its
-// writers: the marker with the highest automatic address wins all header words.
+// Every marker writes the same current-camera header at the near plane.
+// Scan the whole packet surface: draw order cannot select a source-address bound.
 uint chromaHeaderWord(int word) {
     if (word == 0) return CHROMA_AUTO_HEADER;
     if (word <= 16) {
@@ -78,7 +79,7 @@ uint chromaHeaderWord(int word) {
         int j = word - 17;
         return floatBitsToUint(ModelViewMat[j / 3][j % 3]);
     }
-    if (word == 26) return uint(chromaSlot);
+    if (word == 26) return uint(chromaAutoCapacity(ivec2(ScreenSize)) - 1);
     return 0u;
 }
 vec4 chromaMarkerColor() {
@@ -139,6 +140,43 @@ FRAGMENT_BRANCH = """
     if (chromaReservedPixel()) discard;
 """
 
+POSITION_COLOR_BRANCH = """
+    // Known Axiom 6.1.2 CENTER_BOX mesh: local corners at +/-0.3 and uniform
+    // scale >= 0.1, opaque grayscale vertex colors (tint is ColorModulator).
+    // Its 50 ms position interpolation can differ from the scale's
+    // target distance, so do not compare scale with camera distance. This covers
+    // this editor mesh only; upstream mesh changes need a new signature.
+    if (ProjMat[2][3] != 0.0 &&
+        Color.a > 0.999999 &&
+        all(lessThan(abs(Color.rgb - vec3(Color.r)), vec3(0.000001))) &&
+        all(lessThan(abs(abs(Position) - vec3(0.3)), vec3(0.000001)))) {
+        vec3 columnScale = vec3(length(ModelViewMat[0].xyz),
+                                length(ModelViewMat[1].xyz),
+                                length(ModelViewMat[2].xyz));
+        if (columnScale.x >= 0.1 - 0.000001 &&
+            all(lessThan(abs(columnScale - vec3(columnScale.x)),
+                         vec3(max(0.000001, columnScale.x * 0.0001)))))
+            gl_Position.z = gl_Position.w; // Existing non-world/HUD depth sentinel.
+    }
+"""
+
+POSITION_COLOR_FRAGMENT_INCLUDES = """#include <minecraft:globals.glsl>
+#include <minecraft:projection.glsl>
+#include <chroma:auto_read.glsl>
+"""
+
+POSITION_COLOR_FRAGMENT_BRANCH = """
+    // The matched editor cube uses depth 1, but Axiom's ALWAYS_PASS draw can
+    // still overwrite Chroma's colour packets. Reserve transport pixels for
+    // this overlay without changing the shared debug_point varying interface.
+    if (gl_FragCoord.z == 1.0 && ProjMat[2][3] != 0.0) {
+        ivec2 pixel = ivec2(gl_FragCoord.xy);
+        ivec2 size = ivec2(ScreenSize);
+        if (chromaAutoHeaderPixel(pixel, size) ||
+            chromaRawAddressAtPixel(pixel, size) >= 0) discard;
+    }
+"""
+
 
 def transform(vanilla: str, stage: str) -> str:
     """Add Chroma hooks without editing the vanilla color/geometry branches."""
@@ -158,26 +196,27 @@ def transform(vanilla: str, stage: str) -> str:
     return before + VARYINGS.format(direction='in') + FRAGMENT_HELPER + '\nvoid main() {\n' + FRAGMENT_BRANCH + after
 
 
-def transform_terrain(vanilla: str) -> str:
-    """Protect the camera packet from terrain closer than the header's depth."""
-    anchor = '#include <minecraft:globals.glsl>\n'
-    assert vanilla.count(anchor) == 1
-    shader = vanilla.replace(anchor, anchor + '#include <chroma:auto_transport.glsl>\n')
-    anchor = 'void main() {'
-    assert shader.count(anchor) == 1
-    return shader.replace(anchor, anchor + '''
-    // Near-plane terrain can be closer than the depth-arbitrated camera header.
-    // Reserve its 32 pixels in every terrain phase; shade restores their colour.
-    if (chromaAutoHeaderPixel(ivec2(gl_FragCoord.xy), ivec2(ScreenSize))) discard;
-''')
+def transform_position_color(vanilla: str, stage: str = 'vsh') -> str:
+    """Keep the native interface/color/XY and mark only Axiom's center overlay."""
+    if stage == 'fsh':
+        anchor = '#include <minecraft:oit.glsl>\n'
+        assert vanilla.count(anchor) == 1
+        shader = vanilla.replace(anchor, anchor + POSITION_COLOR_FRAGMENT_INCLUDES)
+        anchor = 'void main() {'
+        assert shader.count(anchor) == 1
+        return shader.replace(anchor, anchor + POSITION_COLOR_FRAGMENT_BRANCH)
+    assert vanilla.count('vertexColor = Color;') == 1
+    end = vanilla.rfind('}')
+    return vanilla[:end] + POSITION_COLOR_BRANCH + vanilla[end:]
 
 
-def write_terrain(jar: ZipFile, output: Path) -> None:
-    rel = 'assets/minecraft/shaders/core/terrain.fsh'
-    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
-    destination = output / rel
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(transform_terrain(vanilla), encoding='utf-8', newline='\n')
+def write_position_color(jar: ZipFile, output: Path) -> None:
+    for stage in ('vsh', 'fsh'):
+        rel = f'assets/minecraft/shaders/core/position_color.{stage}'
+        vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+        destination = output / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(transform_position_color(vanilla, stage), encoding='utf-8', newline='\n')
 
 
 def main():
@@ -194,8 +233,9 @@ def main():
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(transform(vanilla, stage), encoding='utf-8', newline='\n')
                 print(rel)
-        write_terrain(jar, args.output)
-        print('assets/minecraft/shaders/core/terrain.fsh')
+        write_position_color(jar, args.output)
+        print('assets/minecraft/shaders/core/position_color.vsh')
+        print('assets/minecraft/shaders/core/position_color.fsh')
 
 
 if __name__ == '__main__':

@@ -4,11 +4,11 @@
 
 // Each RGBA8 texel stores one uint32 or the raw bits of one float32.
 // Camera section: +0 valid, +1..16 projection, +17..32 inverse projection,
-// +33..41 view rotation, +42 source count, +43 maximum automatic address;
+// +33..41 view rotation, +42 source count, +43 automatic-address scan bound;
 // texels 44..127 are reserved.
 // Light records: +0 valid, +1..3 eye position, +4 radius, +5 nominal intensity,
 // +6 shape, +7..9 facing, +10 current-frame flag, +11 automatic vertex address,
-// +12 render intensity with stable per-colour flicker. Header42=count,43=maxaddress.
+// +12 render intensity with stable per-colour flicker. Header42=count,43=scan bound.
 #define MATDEC_LAMP(k) (128 + (k) * 16)
 
 uint chromaMdBits(sampler2D md, int i) {

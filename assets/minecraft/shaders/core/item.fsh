@@ -64,8 +64,8 @@ layout(location = 12) flat in int chromaShape;
 layout(location = 13) flat in vec3 chromaFacing;
 layout(location = 14) flat in int chromaSlot;
 
-// A shared header carries the current camera. Reverse depth arbitrates its
-// writers: the marker with the highest automatic address wins all header words.
+// Every marker writes the same current-camera header at the near plane.
+// Scan the whole packet surface: draw order cannot select a source-address bound.
 uint chromaHeaderWord(int word) {
     if (word == 0) return CHROMA_AUTO_HEADER;
     if (word <= 16) {
@@ -76,7 +76,7 @@ uint chromaHeaderWord(int word) {
         int j = word - 17;
         return floatBitsToUint(ModelViewMat[j / 3][j % 3]);
     }
-    if (word == 26) return uint(chromaSlot);
+    if (word == 26) return uint(chromaAutoCapacity(ivec2(ScreenSize)) - 1);
     return 0u;
 }
 vec4 chromaMarkerColor() {

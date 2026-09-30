@@ -14,10 +14,11 @@ Java agent, mod, script or datapack.
 4. `python tools/check_shadow_math.py`, `python tools/check_voxel_space.py` and
    `python tools/check_voxel_geometry.py` check the CPU geometry references,
    world-anchored pixel sampling and packed storage. They do not execute GLSL.
+5. `python tools/check_transport.py` checks generated shader parity, the camera-header ABI and packet pixel bounds; it does not execute GLSL.
 
 `generate_pack.py` regenerates only the five primary marker models, their legacy
 aliases, ten marker textures, atlas, transport helpers and native core hooks from
-the installed client JAR, including terrain's camera-header guard. It preserves
+the installed client JAR. It preserves
 the lighting shaders and post chain.
 Use `--output PATH` to compare regenerated files before replacing them.
 
