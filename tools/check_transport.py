@@ -66,6 +66,20 @@ def main():
         assert 'chromaAutoHeaderPixel(pixel, size)' in shader
         assert 'chromaRawAddressAtPixel(pixel, size) >= 0' in shader
         checked.append(rel)
+        rel = 'assets/minecraft/shaders/core/position_tex_color.fsh'
+        vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+        shader = (args.root / rel).read_text(encoding='utf-8')
+        assert shader == extract_core.transform_screen_overlay(vanilla), rel
+        assert shader.replace(extract_core.SCREEN_OVERLAY_FRAGMENT_BRANCH, '').replace(
+            '\n' + extract_core.POSITION_COLOR_FRAGMENT_INCLUDES, '') == vanilla
+        # The only injected discard is nested under the perspective condition;
+        # orthographic GUI projection has ProjMat[2][3] == 0 and bypasses it.
+        branch = extract_core.SCREEN_OVERLAY_FRAGMENT_BRANCH
+        assert branch.count('discard;') == 1
+        assert branch.index('if (ProjMat[2][3] != 0.0) {') < branch.index('discard;')
+        assert 'chromaAutoHeaderPixel(pixel, size)' in branch
+        assert 'chromaRawAddressAtPixel(pixel, size) >= 0' in branch
+        checked.append(rel)
     assert not (args.root / 'assets/minecraft/shaders/core/terrain.fsh').exists()
 
     # The full scan must include the final packet at every supported resolution,

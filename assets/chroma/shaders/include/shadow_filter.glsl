@@ -57,28 +57,61 @@ float chromaReceiverDepth(vec3 direction, vec3 normal, float plane) {
     if (abs(denominator) < 0.0001 || denominator * plane <= 0.0) return 1e6;
     return plane / denominator;
 }
-float chromaShadowCompare(int lamp, ivec2 pixel, vec3 normal, float plane, float lightRadius) {
-    float reference = chromaReceiverDepth(chromaShadowDirection(pixel), normal, plane) - 0.02;
-    float depth = chromaShadowDepth(lamp, pixel);
-    return reference > 1e5 || depth >= lightRadius - 0.001 ? 1.0 : step(reference, depth);
+float chromaBoundedReference(vec3 direction, vec3 normal, float plane, vec3 delta, float footprint) {
+    float reference = chromaReceiverDepth(direction, normal, plane);
+    if (reference > 1e5) return -1.0;
+    vec3 offset = direction * reference - delta;
+    return dot(offset, offset) <= footprint * footprint ? reference : -1.0;
 }
-float chromaShadowPCF(int lamp, vec3 direction, vec3 normal, float plane, float lightRadius) {
+vec2 chromaShadowCompare(int lamp, ivec2 pixel, vec3 normal, float plane, vec3 delta,
+                         float footprint, float lightRadius) {
+    float reference = chromaBoundedReference(chromaShadowDirection(pixel), normal, plane, delta, footprint);
+    // A tangent/away-facing tap has no receiver-plane sample. Counting it as
+    // illuminated creates light through opaque walls at grazing incidence.
+    if (reference < 0.0) return vec2(0.0);
+    float depth = chromaShadowDepth(lamp, pixel);
+    return vec2(depth >= lightRadius - 0.001 ? 1.0 : step(reference - 0.02, depth), 1.0);
+}
+vec2 chromaShadowPCF(int lamp, vec3 direction, vec3 normal, float plane, vec3 delta,
+                     float footprint, float lightRadius) {
     vec2 p = chromaShadowUV(direction) * float(CHROMA_SHADOW_RES) - 0.5;
     ivec2 base = ivec2(floor(p));
     vec2 w = fract(p);
-    vec4 visible = vec4(
-        chromaShadowCompare(lamp, base, normal, plane, lightRadius),
-        chromaShadowCompare(lamp, base + ivec2(1,0), normal, plane, lightRadius),
-        chromaShadowCompare(lamp, base + ivec2(0,1), normal, plane, lightRadius),
-        chromaShadowCompare(lamp, base + ivec2(1,1), normal, plane, lightRadius));
-    return mix(mix(visible.x, visible.y, w.x), mix(visible.z, visible.w, w.x), w.y);
+    vec2 a = chromaShadowCompare(lamp, base, normal, plane, delta, footprint, lightRadius);
+    vec2 b = chromaShadowCompare(lamp, base + ivec2(1,0), normal, plane, delta, footprint, lightRadius);
+    vec2 c = chromaShadowCompare(lamp, base + ivec2(0,1), normal, plane, delta, footprint, lightRadius);
+    vec2 d = chromaShadowCompare(lamp, base + ivec2(1,1), normal, plane, delta, footprint, lightRadius);
+    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}
+float chromaShadowFallbackDepth(int lamp, ivec2 pixel, vec3 normal, float plane, float lightRadius) {
+    float depth = chromaShadowDepth(lamp, pixel);
+    if (depth >= lightRadius - 0.001) return depth;
+    float reference = chromaReceiverDepth(chromaShadowDirection(pixel), normal, plane);
+    // A texel consistent with the extrapolated receiver plane is its own
+    // surface, not evidence of a separate blocker along the central ray.
+    return reference < 1e5 && depth >= reference - 0.02 ? -1.0 : depth;
+}
+float chromaShadowFallback(int lamp, vec3 axis, vec3 normal, float plane, float distance, float lightRadius) {
+    // Near the plane horizon, even adjacent texels may project far from the
+    // receiver. Use the least-occluding local radial depth in this finite-map
+    // case, instead of declaring the absent plane samples fully illuminated.
+    ivec2 p = ivec2(floor(chromaShadowUV(axis) * float(CHROMA_SHADOW_RES) - 0.5));
+    float depth = max(max(chromaShadowFallbackDepth(lamp, p, normal, plane, lightRadius),
+                          chromaShadowFallbackDepth(lamp, p + ivec2(1,0), normal, plane, lightRadius)),
+                      max(chromaShadowFallbackDepth(lamp, p + ivec2(0,1), normal, plane, lightRadius),
+                          chromaShadowFallbackDepth(lamp, p + ivec2(1,1), normal, plane, lightRadius)));
+    return depth < 0.0 || depth >= lightRadius - 0.001 ? 1.0 : step(distance - 0.02, depth);
 }
 float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float lightRadius) {
 #if CHROMA_STATIC_WORLD
-    receiver += normal * 0.035;
+    float bias = 0.035;
 #else
-    receiver += normal * 0.18;
+    float bias = 0.18;
 #endif
+    // Never move the receiver plane onto/across its source. At plane == 0,
+    // the old blocker search rejected every tap and returned fully lit.
+    float height = max(dot(light - receiver, normal), 0.0);
+    receiver += normal * min(bias, height * 0.5);
     vec3 delta = receiver - light;
     float distance = length(delta);
     if (distance < 0.05) return 1.0;
@@ -93,30 +126,36 @@ float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float light
     float plane = dot(delta, normal);
     float blockerSum = 0.0, blockers = 0.0;
     float searchAngle = CHROMA_SOURCE_SIZE / max(0.5, distance * 0.2);
+    float texelFootprint = distance * (4.0 / float(CHROMA_SHADOW_RES));
+    float searchFootprint = distance * searchAngle + texelFootprint;
     for (int i = 0; i < 9; ++i) {
         float angle = float(i) * 2.39996323;
         float radius = i == 0 ? 0.0 : sqrt(float(i) / 8.0) * searchAngle;
         vec3 ray = normalize(axis + radius * (cos(angle) * tangent + sin(angle) * bitangent));
         ivec2 pixel = ivec2(chromaShadowUV(ray) * float(CHROMA_SHADOW_RES));
         float depth = i == 0 ? centerDepth : chromaShadowDepth(lamp, pixel);
-        float reference = chromaReceiverDepth(chromaShadowDirection(pixel), normal, plane) - 0.02;
-        if (depth > 0.0001 && depth < lightRadius - 0.001 && depth < reference && reference < 1e5) {
+        float reference = chromaBoundedReference(chromaShadowDirection(pixel), normal, plane, delta, searchFootprint);
+        if (reference >= 0.0 && depth > 0.0001 && depth < lightRadius - 0.001 && depth < reference - 0.02) {
             blockerSum += depth; blockers += 1.0;
         }
     }
-    if (blockers == 0.0) return 1.0;
+    if (blockers == 0.0) {
+        vec2 center = chromaShadowPCF(lamp, axis, normal, plane, delta, texelFootprint, lightRadius);
+        return center.y > 0.00001 ? center.x / center.y : chromaShadowFallback(lamp, axis, normal, plane, distance, lightRadius);
+    }
     float blocker = blockerSum / blockers;
     float penumbra = CHROMA_SOURCE_SIZE * max(distance - blocker, 0.0)
                    / max(distance * blocker, 0.01);
     // Bilinear comparison plus a source-sized disk, all in world directions.
     float filterAngle = max(penumbra, 0.7 / float(CHROMA_SHADOW_RES));
-    float visible = 0.0;
+    float footprint = distance * filterAngle + texelFootprint;
+    vec2 visible = vec2(0.0);
     for (int i = 0; i < 16; ++i) {
         float angle = float(i) * 2.39996323;
         float radius = sqrt((float(i) + 0.5) / 16.0) * filterAngle;
         vec3 ray = normalize(axis + radius * (cos(angle) * tangent + sin(angle) * bitangent));
-        visible += chromaShadowPCF(lamp, ray, normal, plane, lightRadius);
+        visible += chromaShadowPCF(lamp, ray, normal, plane, delta, footprint, lightRadius);
     }
-    return visible / 16.0;
+    return visible.y > 0.00001 ? visible.x / visible.y : chromaShadowFallback(lamp, axis, normal, plane, distance, lightRadius);
 }
 #endif

@@ -52,16 +52,17 @@ def check_pixelation():
     # Two receivers in one world-grid square must share one shadow sample, while
     # the adjacent square stays distinct. Sampling never moves off the surface.
     cameras = ((0,0,0),(-5.3125,7.25,12.875),(14.75,-3.625,-8.125))
+    subdivisions = setting('CHROMA_SHADOW_PIXELS_PER_BLOCK')
     for shift in (0,29_999_900,-29_999_900):
         base = (shift,0,shift)
-        expected = add(base,(.125,1.0625,-.125))
+        expected = add(base,(.5/subdivisions,1.0625,-.5/subdivisions))
         for camera in cameras:
             camera = add(camera,base)
-            for point in ((.04,1.0625,-.22),(.21,1.0625,-.03)):
+            for point in ((.16/subdivisions,1.0625,-.88/subdivisions),(.84/subdivisions,1.0625,-.12/subdivisions)):
                 got = pixel_receiver(add(base,point),(0,1,0),camera)
                 assert max(abs(x-y) for x,y in zip(got,expected))<2e-5, (got,expected)
-            adjacent = pixel_receiver(add(base,(.29,1.0625,-.1)),(0,1,0),camera)
-            assert abs(adjacent[0]-(shift+.375))<2e-5
+            adjacent = pixel_receiver(add(base,(1.16/subdivisions,1.0625,-.4/subdivisions)),(0,1,0),camera)
+            assert abs(adjacent[0]-(shift+1.5/subdivisions))<2e-5
     point,normal = (.21,1.0625,-.03),unit((.3,1,-.2))
     for camera in cameras:
         got = pixel_receiver(point,normal,camera)
@@ -70,7 +71,7 @@ def check_pixelation():
     a = pixel_receiver(point,unit((1.000001,1,0)),cameras[1])
     b = pixel_receiver(point,unit((.999999,1,0)),cameras[1])
     assert max(abs(x-y) for x,y in zip(a,b))<1e-6, 'Near-tied face normals must select a stable grid'
-    return 'world-grid quarter-block samples, camera/large-coordinate invariance, plane preservation and OFF'
+    return f'world-grid 1/{subdivisions:g}-block samples, camera/large-coordinate invariance, plane preservation and OFF'
 
 
 def interval(start, direction, low, high):
@@ -187,9 +188,48 @@ def pcf(ray,normal,plane,sampler,n,light_radius=1e6,old_reference=False):
     return a*(1-w[1])+b*w[1]
 
 
-def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6):
+def bounded_reference(ray, normal, plane, delta, footprint):
+    reference_depth = receiver_depth(ray,normal,plane)
+    if reference_depth > 1e5: return None
+    offset = sub(mul(ray,reference_depth),delta)
+    if dot(offset,offset) > footprint*footprint: return None
+    return reference_depth-.02
+
+
+def bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius):
+    p = tuple(v*n-.5 for v in oct_uv(ray))
+    base = tuple(math.floor(v) for v in p)
+    w = tuple(v-b for v,b in zip(p,base))
+    visible = weight = 0.0
+    for x,y in ((0,0),(1,0),(0,1),(1,1)):
+        sample_ray = oct_ray((base[0]+x,base[1]+y),n)
+        reference_depth = bounded_reference(sample_ray,normal,plane,delta,footprint)
+        if reference_depth is None: continue
+        amount = (w[0] if x else 1-w[0])*(w[1] if y else 1-w[1])
+        depth = sampler(sample_ray)
+        visible += amount*float(depth>=light_radius-.001 or depth>=reference_depth)
+        weight += amount
+    return visible,weight
+
+
+def shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius):
+    base = tuple(math.floor(v*n-.5) for v in oct_uv(axis))
+    candidates = []
+    for x,y in ((0,0),(1,0),(0,1),(1,1)):
+        ray = oct_ray((base[0]+x,base[1]+y),n)
+        depth = sampler(ray)
+        reference_depth = receiver_depth(ray,normal,plane)
+        if depth < light_radius-.001 and reference_depth<1e5 and depth>=reference_depth-.02:
+            depth = -1.0
+        candidates.append(depth)
+    depth = max(candidates)
+    return float(depth<0 or depth>=light_radius-.001 or depth>=distance-.02)
+
+
+def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035):
     sampler = lambda ray: min(analytic_depth(ray,light,receiver,normal,boxes),light_radius)
-    delta = sub(add(receiver,mul(normal,.035)),light)
+    height = max(dot(sub(light,receiver),normal),0.0)
+    delta = sub(add(receiver,mul(normal,min(bias,height*.5))),light)
     distance,axis = math.sqrt(dot(delta,delta)),unit(delta)
     center_pixel = tuple(int(v*n) for v in oct_uv(axis))
     center_depth = sampler(oct_ray(center_pixel,n))
@@ -199,6 +239,8 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6):
     plane = dot(delta,normal)
     blockers = []
     search_angle = radius/max(.5,distance*.2)
+    texel_footprint = distance*4/n
+    search_footprint = distance*search_angle+texel_footprint
     for i in range(9):
         angle = i*2.39996323
         r = 0 if i==0 else math.sqrt(i/8)*search_angle
@@ -206,29 +248,38 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6):
         cell = tuple(int(v*n) for v in oct_uv(ray))
         actual_ray = oct_ray(cell,n)
         depth = sampler(actual_ray)
-        reference_depth = receiver_depth(actual_ray,normal,plane)-.02
-        if .0001<depth<light_radius-.001 and depth<reference_depth<1e5: blockers.append(depth)
-    if not blockers: return 1.0
+        reference_depth = bounded_reference(actual_ray,normal,plane,delta,search_footprint)
+        if reference_depth is not None and .0001<depth<light_radius-.001 and depth<reference_depth:
+            blockers.append(depth)
+    if not blockers:
+        visible,weight = bounded_pcf(axis,normal,plane,delta,texel_footprint,sampler,n,light_radius)
+        return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
     blocker = sum(blockers)/len(blockers)
     penumbra = radius*max(distance-blocker,0)/max(distance*blocker,.01)
     filter_angle = max(penumbra,.7/n)
-    visible = 0.0
+    footprint = distance*filter_angle+texel_footprint
+    visible = weight = 0.0
     for i in range(16):
         angle,r = i*2.39996323,math.sqrt((i+.5)/16)*filter_angle
         ray = unit(add(axis,add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle)))))
-        visible += pcf(ray,normal,plane,sampler,n,light_radius)
-    return visible/16
+        lit,amount = bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius)
+        visible += lit
+        weight += amount
+    return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
 
 
 def check_octahedral(rng,radius):
     n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
     source = re.sub(r'\s+','',re.sub(r'//[^\n]*','',FILTER))
-    assert source.count('chromaReceiverDepth(chromaShadowDirection(pixel),normal,plane)-0.02')==2, 'Both PCF and blocker search must compare the actual sampled texel ray'
-    assert 'reference>1e5||depth>=lightRadius-0.001?1.0:step(reference,depth)' in source
+    assert source.count('chromaBoundedReference(chromaShadowDirection(pixel),normal,plane,delta,')==2, 'PCF and blocker search must compare the actual sampled texel ray'
+    assert 'depth>=lightRadius-0.001?1.0:step(reference-0.02,depth)' in source
+    assert 'if(reference<0.0)returnvec2(0.0);' in source
+    assert 'receiver+=normal*min(bias,height*0.5);' in source
+    assert 'returnvisible.y>0.00001?visible.x/visible.y:chromaShadowFallback(lamp,axis,normal,plane,distance,lightRadius);' in source
     assert 'if(centerDepth<=0.0001)return0.0;' in source
-    assert 'depth>0.0001&&depth<lightRadius-0.001&&depth<reference&&reference<1e5' in source
+    assert 'reference>=0.0&&depth>0.0001&&depth<lightRadius-0.001&&depth<reference-0.02' in source
     for offset in ('base','base+ivec2(1,0)','base+ivec2(0,1)','base+ivec2(1,1)'):
-        assert f'chromaShadowCompare(lamp,{offset},normal,plane,lightRadius)' in source
+        assert f'chromaShadowCompare(lamp,{offset},normal,plane,delta,footprint,lightRadius)' in source
     # Fold every possible bilinear seam/corner neighbour inside its source tile.
     for x in range(-1,n+1):
         for y in (-1,0,n-1,n):
@@ -289,6 +340,54 @@ def check_octahedral(rng,radius):
     return tested,minimum_old,widths
 
 
+def check_room_occlusion(radius):
+    """Compare filtering against independent segments through an opaque wall.
+
+    This room side wall receives a nearly tangent source through the direction
+    of a doorway. A separate complete wall closes that path. Every point of the
+    area emitter is blocked; this remains true when the receiver bias equals or
+    exceeds the source's height above the side wall. The same receiver without
+    the blocking wall must remain lit, so a blanket grazing-angle darkening fails.
+    """
+    shade = (ROOT / 'assets/chroma/shaders/post/shade.fsh').read_text()
+    source = re.sub(r'\s+','',re.sub(r'//[^\n]*','',shade))
+    assert 'floatdiff=max(dot(normal,L),0.0);' in source
+    assert 'DIFFUSE_WRAP' not in source and 'glowWeight' not in source and 'outc+=vol' not in source
+    assert 'surfaceWeight*=visibility;' in source
+    assert 'radiance+=lCol*(lInt*surfaceWeight);' in source
+    # Exact independent cosine law: back-facing opaque surfaces receive no
+    # direct irradiance, while their lit side still receives positive energy.
+    for cosine in (-1,-.75,-.5,-.01,0,.01,.25,1):
+        lambert = max(cosine,0.0)
+        if cosine<=0: assert lambert==0
+        else: assert lambert>0
+    assert max(-.5+.75,0)/1.75 > 0, 'Fixture must expose the removed wrap leak'
+
+    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    tested = 0
+    # Axis permutations/signs keep the independent blocker an exact AABB while
+    # exercising different octahedral faces and folds, not one favorable tile.
+    for permutation in ((0,1,2),(1,2,0),(2,0,1)):
+        for sign in (-1,1):
+            rotate = lambda v: tuple(sign*v[i] for i in permutation)
+            a,b = rotate((-100,-100,1)),rotate((100,100,2))
+            boxes = [(tuple(min(x,y) for x,y in zip(a,b)),tuple(max(x,y) for x,y in zip(a,b)))]
+            receiver,normal = rotate((0,0,4)),rotate((1,0,0))
+            for height in (.001,.005,.02,.035,.05,.1,.17,.18,.2,.3,.6,1):
+                light = rotate((height,0,0))
+                assert all(reference(receiver,s,boxes) for s in samples(receiver,light,128,radius))
+                for bias in (.035,.18):
+                    for camera in ((0,0,0),(-40.25,12.5,17.75),(29_999_900.125,-11.25,-29_999_900.375)):
+                        local_boxes = [(sub(a,camera),sub(b,camera)) for a,b in boxes]
+                        point,lamp = sub(receiver,camera),sub(light,camera)
+                        blocked = pcss(point,normal,lamp,local_boxes,n,radius,12,bias)
+                        clear = pcss(point,normal,lamp,[],n,radius,12,bias)
+                        assert blocked<1e-12, ('Opaque room wall leaked',height,bias,permutation,sign,blocked)
+                        assert clear>1-1e-12, ('Open grazing plane darkened',height,bias,permutation,sign,clear)
+                        tested += 1
+    return tested
+
+
 def main():
     pixelation = check_pixelation()
     compact = re.sub(r'\s+', '', re.sub(r'//[^\n]*', '', SOURCE))
@@ -342,12 +441,15 @@ def main():
         assert 'return min(t, lengthRay) * CHROMA_VOX_CELL;' in body
     else: assert bounded
     floors,old_acne,pcss_widths = check_octahedral(rng,radius)
+    room_cases = check_room_occlusion(radius)
     print(f'PASS: {tested} ray/camera/large-coordinate comparisons; penumbra widths '
           f'{widths[0]:.3f}->{widths[1]:.3f}; bounded traversal checked; '
           f'octahedral seams and {floors} unoccluded planes stay lit '
           f'(old PCF regression={old_acne:.3f}); PCSS penumbra '
           f'{pcss_widths[0]:.3f}->{pcss_widths[1]:.3f}; buried/near-source blockers remain occluded')
     print('PASS: '+pixelation)
+    print(f'PASS: {room_cases} blocked/open room-wall pairs, Static/Dynamic bias, grazing angles, '
+          'six orientations and camera translations; opaque backfaces receive no direct lamp energy')
 
 
 if __name__ == '__main__':

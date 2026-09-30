@@ -3,7 +3,7 @@
 #include <chroma:bits.glsl>
 
 // Reconstruct visible surfaces from depth, add the marker lights, then apply
-// depth fog and analytic glow. The matrix and colour caches supply lamp data.
+// depth fog. The matrix and colour caches supply lamp data.
 
 // Light appearance. Marker scale.x controls radius; scale.y controls intensity.
 #define RADIUS_GAIN     CHROMA_RADIUS_GAIN
@@ -15,7 +15,6 @@
 #define LOOK_CORE         4.0
 #define LOOK_FULL_LUM     3.0
 #define FALLOFF_CORE      0.15
-#define DIFFUSE_WRAP     0.75
 
 // Medium spotlight angles. Narrow and wide variants are selected per marker.
 #define SPOT_COS_INNER    0.95
@@ -27,10 +26,6 @@
 #define FOG_DENSITY  0.016
 #define FOG_MAX      0.85
 #define FOG_SKY      0.5
-
-// Analytic glow along the view ray. Set strength to zero to disable.
-#define VOL_STRENGTH 0.002
-#define VOL_MIN_H    0.35
 
 #include <minecraft:globals.glsl>
 #include <chroma:lighting.glsl>
@@ -69,7 +64,7 @@ vec3 reconstructEyePosAt(vec2 uv, float d, mat4 invProj) {
 }
 
 // Camera matrices are decoded once per screen-triangle vertex. Each shaded
-// pixel visits only the sources in its tile, using one loop for light and glow.
+// pixel visits only the sources in its tile.
 void main() {
     vec3 albedo = texture(InSampler, texCoord).rgb;
     vec2 suv = texCoord;
@@ -139,11 +134,7 @@ void main() {
         normal = normalize(cross(dxp, dyp));
         if (dot(normal, fragPos) > 0.0) normal = -normal;
     }
-    float tMax = isSky ? 200.0 : length(fragPos);
-    vec3 D = isSky ? normalize(reconstructEyePosAt(suv, 0.001, cameraInvProj))
-                   : fragPos / max(tMax, 1e-4);
     vec3 radiance = vec3(0.0);
-    vec3 vol = vec3(0.0);
     float shadowDebug = 1.0;
     vec3 worldReceiver = cameraInvRot * fragPos;
     vec3 worldNormal = cameraInvRot * normal;
@@ -167,7 +158,7 @@ void main() {
             float dist = length(toL);
             if (dist <= lRad) {
                 vec3 L = toL / max(dist, 1e-4);
-                float diff = max(dot(normal, L) + DIFFUSE_WRAP, 0.0) / (1.0 + DIFFUSE_WRAP);
+                float diff = max(dot(normal, L), 0.0);
                 float rx = clamp(dist / lRad, 0.0, 1.0);
                 float fall = 1.0 - smoothstep(FALLOFF_CORE, 1.0, rx);
                 if (lShape >= 1 && lShape <= 3) {
@@ -195,21 +186,10 @@ void main() {
                 }
             }
         }
-        float glowWeight = 0.0;
-        float tc = dot(lPos, D);
-        if (tc + lRad >= 0.0) {
-            float h = max(sqrt(max(dot(lPos, lPos) - tc * tc, 0.0)), VOL_MIN_H);
-            float win = 1.0 - smoothstep(0.0, lRad, h);
-            if (win > 0.0) {
-                float integral = (atan((tMax - tc) / h) - atan(-tc / h)) / h;
-                glowWeight = VOL_STRENGTH * win * integral;
-            }
-        }
-        if (surfaceWeight == 0.0 && glowWeight == 0.0) continue;
+        if (surfaceWeight == 0.0) continue;
         float lInt = max(chromaMdRenderIntensity(MatDecSampler, k) * INTENSITY_GAIN, 0.0);
         vec3 lCol = texelFetch(ColorSampler, ivec2(k, 0), 0).rgb;
         radiance += lCol * (lInt * surfaceWeight);
-        vol += lCol * (lInt * glowWeight);
     }
 
     float radLum = dot(radiance, vec3(0.2125, 0.7154, 0.0721));
@@ -230,7 +210,6 @@ void main() {
     }
     outc = mix(albedo, outc, reach);
     outc = mix(outc, FOG_COLOR, fogF);
-    outc += vol;
     fragColor = vec4(outc, 1.0);
 #if CHROMA_SHADOW_DEBUG
     fragColor = vec4(vec3(shadowDebug), 1.0);

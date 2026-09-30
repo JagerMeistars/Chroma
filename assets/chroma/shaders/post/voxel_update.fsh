@@ -100,25 +100,29 @@ uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection
     // Reject planes outside the cell's normal extent before probing them.
     float planeOffset = dot(transpose(rotation) * surface - centre, normal);
     float cellExtent = CHROMA_VOX_CELL * 0.5 * dot(abs(normal), vec3(1.0));
+    bool clearPlane = false;
     if (previous > 0u && planeOffset <= -cellExtent + 0.001) {
         // A removed caster can leave a cell touching the floor: the conservative
         // eye-depth margin misses it, and a probe on the floor has zero gap.
         // Clear only against a locally confirmed plane, not a silhouette pair.
-        bool clearPlane = true;
+        clearPlane = true;
         for (int i = 0; i < 4; ++i)
             if (distanceZ[i] > 1.0 || abs(dot(side[i] - surface, normalEye)) > 0.01)
                 clearPlane = false;
-        if (clearPlane) return 0u;
     }
+    // The centre pixel may see background while the projected probe sees a
+    // small solid in this cell. Let that positive hit win before clearing;
+    // otherwise a fixed scene alternates empty/occupied every update slice.
+    uint unresolved = clearPlane ? 0u : previous;
     float planeLimit = cellExtent + 0.02;
-    if (abs(planeOffset) > planeLimit) return previous;
+    if (abs(planeOffset) > planeLimit) return unresolved;
     vec3 probe = centre + normal * planeOffset;
     vec3 probeEye = rotation * probe;
     ivec2 q;
-    if (!projectPixel(probeEye, projection, size, q)) return previous;
+    if (!projectPixel(probeEye, projection, size, q)) return unresolved;
     float qd = texelFetch(InDepthSampler, q, 0).r;
-    if (qd >= 0.999999) return previous;
-    if (qd <= 0.000001) return previous > 0u ? previous - 1u : 0u;
+    if (qd >= 0.999999) return unresolved;
+    if (qd <= 0.000001) return clearPlane ? 0u : (previous > 0u ? previous - 1u : 0u);
     vec3 hitEye = eyeAt(q, qd, inverseProjection, size);
     vec3 hit = transpose(rotation) * hitEye;
     if (length(hit - probe) <= 0.15 && abs(dot(hit - centre, normal)) <= planeLimit) {
@@ -127,6 +131,7 @@ uint observe(ivec3 voxel, uint previous, mat4 projection, mat4 inverseProjection
         // avoids expanding a thin silhouette sideways into adjacent empty cells.
         if (all(equal(hitCell, voxel))) return 3u;
     }
+    if (clearPlane) return 0u;
     if (probeEye.z > hitEye.z + 0.10) return previous > 0u ? previous - 1u : 0u;
     return previous;
 }

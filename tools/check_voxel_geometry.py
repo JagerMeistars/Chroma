@@ -142,9 +142,10 @@ def check():
     assert 'distanceZ[horizontal] > 1.0 || distanceZ[vertical] > 1.0' in source
     assert 'all(equal(hitCell, voxel))' in source
     assert 'vec3 probe = centre + normal * planeOffset;' in source
-    assert 'if (abs(planeOffset) > planeLimit) return previous;' in source
+    assert 'if (abs(planeOffset) > planeLimit) return unresolved;' in source
     assert 'previous > 0u && planeOffset <= -cellExtent + 0.001' in source
     assert 'if (clearPlane) return 0u;' in source
+    assert source.index('if (all(equal(hitCell, voxel))) return 3u;') < source.index('if (clearPlane) return 0u;')
     assert 'else if (confidence >= 2u) confidence = clearObservedAir' in source
     assert '(oldWord & 0xAAAAAAAAu) == 0u' in source
     assert 'abs(dot(side[i] - surface, normalEye)) > CHROMA_VOX_CELL * 0.5) return previous;' not in source
@@ -211,11 +212,40 @@ def check():
             assert not (eye[2] > surface[2] + CELL), 'Regression no longer exercises the old failure'
             assert after.plane_vacant(v) and not after.occupied_oracle(v)
         assert not after.plane_vacant((-1, 3, 12)), 'The solid floor cell must remain'
+        # A fixed camera sees the floor at the cell-centre pixel, but a tiny
+        # caster at the projected plane probe. Analytic depth (not invented
+        # confidence inputs) proves both observations coexist in a real scene.
+        # The former early clear made this occupied cell oscillate 0/3 forever.
+        floor = [((-5, -.25, -5), (5, 0, 5))]
+        tiny = [((.05, 0, .05), (.16, .05, .16))]
+        pose = dict(camera=(-1, 1.4, -1), target=(.125, .125, .125))
+        occupied = DepthScene(floor + tiny, **pose)
+        removed = DepthScene(floor, **pose)
+        voxel = (0, 0, 0)
+        assert occupied.occupied_oracle(voxel)
+        assert occupied.observed(voxel) and occupied.plane_vacant(voxel)
+        assert not removed.occupied_oracle(voxel) and not removed.observed(voxel)
+        assert removed.plane_vacant(voxel)
+        def advance(scene, previous, early_clear):
+            vacant = previous > 0 and scene.plane_vacant(voxel)
+            if early_clear and vacant:
+                return 0
+            if scene.observed(voxel):
+                return 3
+            return 0 if vacant else previous
+        old_sequence, fixed_sequence = [0], [0]
+        for _ in range(6):
+            old_sequence.append(advance(occupied, old_sequence[-1], True))
+            fixed_sequence.append(advance(occupied, fixed_sequence[-1], False))
+        assert old_sequence == [0, 3, 0, 3, 0, 3, 0]
+        assert fixed_sequence == [0, 3, 3, 3, 3, 3, 3]
+        assert advance(removed, fixed_sequence[-1], False) == 0
     finally:
         SIZE[:] = old_size
     print('PASS: analytic depth scenes; no learned cell outside solid AABBs;', totals)
     print(f'Removed actor: {clear}/{len(cached)} cached surface cells are proven vacant immediately.')
     print('Contact-plane regression: both former leg cells clear; the adjacent solid floor cell remains.')
+    print(f'Fixed-view tiny caster: old {old_sequence}; fixed {fixed_sequence}; removal clears to 0.')
     print('Visible vacancies are checked every frame; hidden edits and sub-quarter-cell detail remain limited.')
 
 

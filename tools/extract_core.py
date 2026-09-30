@@ -1,7 +1,7 @@
 """Rebuild Chroma core hooks from exact Minecraft 26.3 vanilla shaders.
 
 Generated files retain GLSL 330 and vanilla branches. This writes item/entity
-hooks and a position_color editor-overlay guard; no terrain/post shaders change.
+hooks and editor/screen-overlay guards; no terrain/post shaders change.
 """
 from argparse import ArgumentParser
 from pathlib import Path
@@ -177,6 +177,19 @@ POSITION_COLOR_FRAGMENT_BRANCH = """
     }
 """
 
+SCREEN_OVERLAY_FRAGMENT_BRANCH = """
+    // Vanilla block/water/fire screen effects use this shared shader after
+    // world rendering. Preserve Chroma's packets only in their 3D-HUD pass;
+    // ordinary orthographic GUI/startup draws keep the complete native image.
+    // Reserving possible payload cells leaves gaps in a fullscreen overlay.
+    if (ProjMat[2][3] != 0.0) {
+        ivec2 pixel = ivec2(gl_FragCoord.xy);
+        ivec2 size = ivec2(ScreenSize);
+        if (chromaAutoHeaderPixel(pixel, size) ||
+            chromaRawAddressAtPixel(pixel, size) >= 0) discard;
+    }
+"""
+
 
 def transform(vanilla: str, stage: str) -> str:
     """Add Chroma hooks without editing the vanilla color/geometry branches."""
@@ -219,6 +232,24 @@ def write_position_color(jar: ZipFile, output: Path) -> None:
         destination.write_text(transform_position_color(vanilla, stage), encoding='utf-8', newline='\n')
 
 
+def transform_screen_overlay(vanilla: str) -> str:
+    """Protect packets from late perspective overlays, preserving native GUI."""
+    anchor = '#extension GL_ARB_separate_shader_objects : require\n'
+    assert vanilla.count(anchor) == 1
+    shader = vanilla.replace(anchor, anchor + '\n' + POSITION_COLOR_FRAGMENT_INCLUDES)
+    anchor = 'void main() {'
+    assert shader.count(anchor) == 1
+    return shader.replace(anchor, anchor + SCREEN_OVERLAY_FRAGMENT_BRANCH)
+
+
+def write_screen_overlay(jar: ZipFile, output: Path) -> None:
+    rel = 'assets/minecraft/shaders/core/position_tex_color.fsh'
+    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+    destination = output / rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(transform_screen_overlay(vanilla), encoding='utf-8', newline='\n')
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument('--client-jar', type=Path, default=Path(os.environ['APPDATA']) / 'PrismLauncher/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar')
@@ -236,6 +267,8 @@ def main():
         write_position_color(jar, args.output)
         print('assets/minecraft/shaders/core/position_color.vsh')
         print('assets/minecraft/shaders/core/position_color.fsh')
+        write_screen_overlay(jar, args.output)
+        print('assets/minecraft/shaders/core/position_tex_color.fsh')
 
 
 if __name__ == '__main__':
