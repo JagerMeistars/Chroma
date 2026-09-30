@@ -187,6 +187,10 @@
           "use_depth_buffer": true
         },
         {
+          "sampler_name": "MainColor",
+          "target": "minecraft:main"
+        },
+        {
           "sampler_name": "MatDec",
           "target": "matdec"
         },
@@ -316,6 +320,10 @@
         {
           "sampler_name": "Shadow",
           "target": "shadow_map"
+        },
+        {
+          "sampler_name": "Voxel",
+          "target": "voxel"
         }
       ],
       "output": "swap"

@@ -43,6 +43,7 @@ def configure(chain, volume=None):
             render_pass('voxel_update','voxel',[
                 target_input('Prev','voxel_history'), target_input('Meta','voxel_meta_history'),
                 target_input('InDepth','minecraft:main',use_depth_buffer=True),
+                target_input('MainColor','minecraft:main'),
                 target_input('MatDec','matdec'), target_input('Catalog','catalog')]),
             render_pass('voxel_meta','voxel_meta',[
                 target_input('Meta','voxel_meta_history'), target_input('MatDec','matdec')]),
@@ -71,6 +72,7 @@ def configure(chain, volume=None):
         render_pass('shadow_meta','shadow_meta',[target_input('MatDec','matdec')]),
         render_pass('shadow_map','shadow_map',shadow_inputs)]
     shade['inputs'].append(target_input('Shadow','shadow_map'))
+    shade['inputs'].append(voxel_inputs[0])
     chain['passes'][-1:-1]=[
         render_pass('copy','shadow_map_history',[target_input('In','shadow_map')]),
         render_pass('copy','shadow_meta_history',[target_input('In','shadow_meta')])]

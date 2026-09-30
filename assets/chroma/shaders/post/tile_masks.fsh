@@ -2,10 +2,11 @@
 #extension GL_ARB_separate_shader_objects : require
 
 // Four texels per tile each hold the 32-bit union for one quarter of 128 lamps.
-// Bounds include the entire sphere, so the same mask is valid for surface
-// lighting and analytic glow. Near-plane intersections conservatively touch
+// Bounds include the entire light sphere and any snapped receiver displacement.
+// Near-plane intersections conservatively touch
 // every tile; no source is silently dropped when all 128 lights overlap.
 #include <chroma:lighting.glsl>
+#include <chroma:shadow_config.glsl>
 
 uniform sampler2D MatDecSampler;
 uniform sampler2D SceneSampler;
@@ -48,6 +49,11 @@ void main() {
     for (int k = bank * 32; k < min((bank + 1) * 32, CHROMA_LAMPS); k++) {
         if (!chromaMdLampOn(MatDecSampler, k)) continue;
         float radius = max(chromaMdLampRadiusOf(MatDecSampler, k) * CHROMA_RADIUS_GAIN, 0.001);
+#if CHROMA_SHADOW_PIXELATE
+        // Two half-cell offsets plus the dominant-axis plane correction move
+        // a sample by at most sqrt(1.5) cells. Do not clip a lit grid square.
+        radius += 1.25 / float(max(CHROMA_SHADOW_PIXELS_PER_BLOCK, 1));
+#endif
         if (lightTouchesTile(chromaMdLampEyeOf(MatDecSampler, k), radius, tileMin, tileMax))
             mask |= 1u << uint(k & 31);
     }

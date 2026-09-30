@@ -8,6 +8,8 @@ import math
 import random
 import re
 import struct
+import json
+from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'assets/chroma/shaders/include/shadows.glsl').read_text()
@@ -213,7 +215,8 @@ def bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius):
     return visible,weight
 
 
-def weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_radius,receiver_bias,foreground_limit):
+def grid_weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_radius,receiver_bias,foreground_limit):
+    """Previous bilinear comparisons, retained to expose angular silhouette aliasing."""
     p = tuple(v*n-.5 for v in oct_uv(ray))
     base = tuple(math.floor(v) for v in p)
     w = tuple(v-b for v,b in zip(p,base))
@@ -238,6 +241,51 @@ def weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_rad
     return visible,weight
 
 
+def weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_radius,receiver_bias,foreground_limit):
+    # The production sampler reconstructs this ray from neighbouring voxel
+    # faces. Ideal analytic samplers test the filter independently of that step.
+    depth = sampler(ray)
+    reference_depth = receiver_depth(ray,normal,surface_plane+receiver_bias)
+    if depth >= light_radius-.001:
+        return (1.0,1.0) if reference_depth<=light_radius else (0.0,0.0)
+    if -.02 <= dot(ray,normal)*depth-surface_plane <= receiver_bias+.02:
+        t = min(max((depth-foreground_limit)/footprint,0.0),1.0)
+        weight = t*t*(3-2*t)
+        return weight,weight
+    reference_depth = distance if reference_depth>1e5 else max(distance,reference_depth)
+    return float(depth>=reference_depth-.02),1.0
+
+
+def refined_depth(ray,light,radius,n,fetch,occupied,camera=(0,0,0)):
+    """Mirror only the face reconstruction; fetch/occupancy are independent oracles."""
+    block = tuple(math.floor(v) for v in camera)
+    offset = sub(block,camera)
+    relative_light = tuple(f32(v) for v in sub(light,camera))
+    local_light = sub(relative_light,offset)
+    base = tuple(math.floor(v*n-.5) for v in oct_uv(ray))
+    nearest = radius
+    seen = [None]*3
+    for x,y in ((0,0),(1,0),(0,1),(1,1)):
+        pixel = oct_seam((base[0]+x,base[1]+y),n)
+        depth = fetch(pixel)
+        if depth<=.0001: return depth
+        if depth>=radius-.001: continue
+        sampled_ray = oct_ray(pixel,n)
+        hit = add(local_light,mul(sampled_ray,depth))
+        face = tuple(round(v*4) for v in hit)
+        plane = mul(face,.25)
+        for axis in range(3):
+            if (abs(hit[axis]-plane[axis])>.002 or abs(sampled_ray[axis])<1e-6
+                    or abs(ray[axis])<1e-6 or seen[axis]==face[axis]): continue
+            seen[axis] = face[axis]
+            t = (plane[axis]-local_light[axis])/ray[axis]
+            if t<=0 or t>=nearest: continue
+            point = sub(add(relative_light,mul(ray,t+.0001)),offset)
+            cell = tuple(4*b+math.floor(p*4) for b,p in zip(block,point))
+            if occupied(cell): nearest = t
+    return nearest
+
+
 def shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius):
     base = tuple(math.floor(v*n-.5) for v in oct_uv(axis))
     candidates = []
@@ -252,9 +300,13 @@ def shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius):
     return float(depth<0 or depth>=light_radius-.001 or depth>=distance-.02)
 
 
-def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_footprint=False,receiver_hull_offset=0.0):
+def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_footprint=False,receiver_hull_offset=0.0,
+         depth_query=None,sampled_depth=None,legacy_grid=False):
     hull = add(receiver,mul(normal,receiver_hull_offset))
     sampler = lambda ray: min(analytic_depth(ray,light,hull,normal,boxes),light_radius)
+    if sampled_depth is not None: sampler = sampled_depth
+    filtered_sampler = depth_query or sampler
+    filter_pcf = grid_weighted_pcf if legacy_grid else weighted_pcf
     height = max(dot(sub(light,receiver),normal),0.0)
     surface_plane = dot(sub(receiver,light),normal)
     receiver_bias = min(bias,height*.5)
@@ -287,7 +339,7 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_
     if not blockers:
         visible,weight = (bounded_pcf(axis,normal,plane,delta,texel_footprint,sampler,n,light_radius)
                           if legacy_footprint else
-                          weighted_pcf(axis,normal,surface_plane,distance,texel_footprint,sampler,n,light_radius,receiver_bias,distance))
+                          filter_pcf(axis,normal,surface_plane,distance,texel_footprint,filtered_sampler,n,light_radius,receiver_bias,distance))
         return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
     blocker = sum(blockers)/len(blockers)
     penumbra = radius*max(distance-blocker,0)/max(distance*blocker,.01)
@@ -300,7 +352,7 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_
         ray = unit(add(axis,add(mul(tangent,r*math.cos(angle)),mul(bitangent,r*math.sin(angle)))))
         lit,amount = (bounded_pcf(ray,normal,plane,delta,footprint,sampler,n,light_radius)
                       if legacy_footprint else
-                      weighted_pcf(ray,normal,surface_plane,distance,footprint,sampler,n,light_radius,receiver_bias,foreground_limit))
+                      filter_pcf(ray,normal,surface_plane,distance,footprint,filtered_sampler,n,light_radius,receiver_bias,foreground_limit))
         visible += lit
         weight += amount
     return visible/weight if weight>1e-5 else shadow_fallback(axis,normal,plane,distance,sampler,n,light_radius)
@@ -320,8 +372,10 @@ def check_octahedral(rng,radius):
     assert 'returnvisible.y>0.00001?visible.x/visible.y:chromaShadowFallback(lamp,axis,normal,plane,distance,lightRadius);' in source
     assert 'if(centerDepth<=0.0001)return0.0;' in source
     assert '!chromaShadowReceiverHit(surfaceOffset,receiverBias)&&depth>0.0001&&depth<lightRadius-0.001&&depth<distance-0.02' in source
-    for offset in ('base','base+ivec2(1,0)','base+ivec2(0,1)','base+ivec2(1,1)'):
-        assert f'chromaShadowCompare(lamp,{offset},normal,surfacePlane,distance,footprint,lightRadius,receiverBias,foregroundLimit)' in source
+    assert 'ivec2pixel=base+ivec2(i&1,i>>1);' in source
+    assert 'ivec3face=ivec3(round(hit*float(CHROMA_VOX_CELLS)));' in source
+    assert 'if(chromaVoxConfidence(VoxelSampler,cell)>=2u)nearest=t;' in source
+    assert 'floatdepth=chromaShadowRayDepth(lamp,direction,light,lightRadius);' in source
     # Fold every possible bilinear seam/corner neighbour inside its source tile.
     for x in range(-1,n+1):
         for y in (-1,0,n-1,n):
@@ -455,12 +509,33 @@ def check_shadow_contour(radius):
             values = [pcss(rotate((-z*.5-.8+i*.04,0,z)),normal,light,boxes,n,radius,40,
                            legacy_footprint=legacy) for i in range(41)]
             reverse = max(reverse,max(a-b for a,b in zip(values,values[1:])))
-            crossings = [-.8+i*.04+(.5-a)/(b-a)*.04
-                         for i,(a,b) in enumerate(zip(values,values[1:]))
-                         if a!=b and (a-.5)*(b-.5)<=0]
-            multiple += len(crossings)!=1
-            edges.append(crossings[0] if crossings else math.nan)
-        jump = max(abs(a-b) for a,b in zip(edges,edges[1:]) if math.isfinite(a+b))
+            if legacy:
+                crossings = [-.8+i*.04+(.5-a)/(b-a)*.04
+                             for i,(a,b) in enumerate(zip(values,values[1:]))
+                             if a!=b and (a-.5)*(b-.5)<=0]
+                multiple += len(crossings)!=1
+                edge = crossings[0] if crossings else math.nan
+                edges.append((edge,edge))
+            else:
+                # Sixteen geometric rays quantize coverage in 1/16 increments.
+                # A run of exactly .5 is one uncertainty interval, not multiple
+                # disconnected edges. Bound that interval by one sample on each
+                # side, then require adjacent contour intervals to overlap.
+                below = [i for i,v in enumerate(values) if v < .5-1/16-1e-8]
+                above = [i for i,v in enumerate(values) if v > .5+1/16+1e-8]
+                assert below and above, 'Contour must have dark and clear sides'
+                low,high = max(below),min(above)
+                multiple += low>=high
+                edge = (-.8+low*.04,-.8+high*.04)
+                # Independent emitter support: the disk is contained by
+                # sx=2+-radius, sz=-4+-radius. Project those extremes through
+                # x=z=0; a displaced/over-wide contour must fail even if smooth.
+                support = (z*((2+radius)/(-4+radius)+.5),
+                           z*((2-radius)/(-4-radius)+.5))
+                assert edge[0]>=support[0]-.04 and edge[1]<=support[1]+.04, (edge,support)
+                edges.append(edge)
+        jump = max(max(a[0]-b[1],b[0]-a[1],0) for a,b in zip(edges,edges[1:])
+                   if all(map(math.isfinite,(*a,*b))))
         return reverse,jump,multiple
 
     old_reverse,old_jump,old_multiple = contour((0,1,2),1,True)
@@ -469,9 +544,9 @@ def check_shadow_contour(radius):
     for permutation in ((0,1,2),(1,2,0),(2,0,1)):
         for sign in (-1,1):
             reverse,jump,multiple = contour(permutation,sign)
-            # Finite angular/tap sampling still introduces small variations;
-            # the previous 100% reversals and disconnected contours are forbidden.
-            assert reverse<.04 and jump<.125 and multiple==0, (permutation,sign,reverse,jump,multiple)
+            # Permit at most one of the sixteen integration samples to change;
+            # no gap between adjacent coverage intervals is permitted.
+            assert reverse<=1/16+1e-8 and jump==0 and multiple==0, (permutation,sign,reverse,jump,multiple)
             worst_reverse = max(worst_reverse,reverse)
             worst_jump = max(worst_jump,jump)
 
@@ -484,6 +559,115 @@ def check_shadow_contour(radius):
             assert all(reference(receiver,s,boxes) for s in samples(receiver,light,128,radius))
             assert pcss(receiver,(1,0,0),light,boxes,n,radius,12)<1e-12
     return old_reverse,old_jump,worst_reverse,worst_jump
+
+
+def box_atlas(light,boxes,n,light_radius):
+    """Independent exact AABB intersections and quarter-grid membership."""
+    @lru_cache(maxsize=None)
+    def fetch(pixel):
+        ray = oct_ray(pixel,n)
+        distance = light_radius
+        for low,high in boxes:
+            near,far = interval(light,ray,low,high)
+            if max(near,0)<far:
+                distance = min(distance,max(near,.000025))
+        return f32(distance)
+
+    def occupied(cell):
+        point = mul(add(cell,(.5,.5,.5)),.25)
+        return any(all(a<=p<b for a,p,b in zip(low,point,high)) for low,high in boxes)
+
+    def raw(ray):
+        return fetch(oct_seam(tuple(int(v*n) for v in oct_uv(ray)),n))
+
+    return fetch,occupied,raw
+
+
+def check_face_refinement():
+    """Quarter faces, edge/corner ties, tangent axes and bounded empty space."""
+    cases = (
+        ((-2,-2,-2),unit((1,1,1))),
+        ((-2,-2,.125),unit((1,1,0))),
+        ((-2,0,0),(1,0,0)),
+        ((.125,2,.125),(0,-1,0)),
+    )
+    count = 0
+    for shift in (0,29_999_900,-29_999_900):
+        delta = (shift,0,-shift)
+        boxes = [(delta,add(delta,(.25,.25,.25)))]
+        for start,ray in cases:
+            light = add(start,delta)
+            fetch,occupied,_ = box_atlas(light,boxes,128,12)
+            expected = interval(light,ray,*boxes[0])[0]
+            for camera in ((.125,-.375,.625),(-5.75,7.5,-3.25)):
+                value = refined_depth(ray,light,12,128,fetch,occupied,add(camera,delta))
+                assert abs(value-expected)<2e-5, ('Quarter face/tie mismatch',start,ray,value,expected)
+                # A stale map may propose a face, but an empty current volume
+                # or an out-of-bounds face must not cast a fabricated shadow.
+                assert refined_depth(ray,light,12,128,fetch,lambda _:False,add(camera,delta))==12
+                count += 1
+    assert refined_depth((1,0,0),(0,0,0),12,128,lambda _:.000025,lambda _:True)==.000025
+    assert refined_depth((1,0,0),(0,0,0),12,128,lambda _:12,lambda _:True)==12
+    # The shader bounds test precedes its texture lookup, and reads the same
+    # base packed atlas (not a mip) used by the shadow-map DDA.
+    space = re.sub(r'\s+','',(ROOT/'assets/chroma/shaders/include/voxel_space.glsl').read_text())
+    assert 'if(!chromaVoxContains(voxel,chromaVoxOrigin()))return0u;' in space
+    assert 'uniform sampler2D VoxelSampler;' in FILTER
+    # Configure both public RP modes in memory. The shade lookup must receive
+    # exactly the same base atlas as the DDA, with no mip or history substitution.
+    from build_shadows import configure, CHAIN
+    for volume in (None,dict(dims=[384,64,320])):
+        chain = configure(json.loads((ROOT/CHAIN).read_text()),volume)
+        inputs = []
+        for shader in ('shadow_map','shade'):
+            render = next(p for p in chain['passes'] if p['fragment_shader']=='chroma:post/'+shader)
+            matches = [i for i in render['inputs'] if i['sampler_name']=='Voxel']
+            assert len(matches)==1
+            inputs.append(matches[0])
+        assert inputs[0]==inputs[1]
+        if volume:
+            assert inputs[0]==dict(sampler_name='Voxel',location='chroma:shadows/volume',
+                                   width=7680,height=64,bilinear=False)
+        else:
+            assert inputs[0]==dict(sampler_name='Voxel',target='voxel')
+    return count
+
+
+def check_captured_room_contour(radius):
+    """The actual objCubed room: test its visible 10% edge, not just 50%.
+
+    These eight AABBs are the complete exported quarter-volume, merged without
+    changing occupancy. Offline validation compared all 16384 captured atlas
+    depths to their independent ray intersections: maximum error 0.000030 m.
+    This fixture needs neither that large capture nor a running game.
+    """
+    boxes = [
+        ((-8,-61,-47),(68,-60,25)), ((9,-60,-2),(13,-56,-1)),
+        ((9,-60,3),(13,-56,4)), ((8,-60,-1),(9,-56,1)),
+        ((8,-60,2),(9,-56,3)), ((13,-60,-1),(14,-56,3)),
+        ((8,-58,1),(9,-56,2)), ((9,-56,-1),(13,-55,3)),
+    ]
+    light,light_radius,n = (4.3125,-57.625,2.875),35.5,128
+    fetch,occupied,raw = box_atlas(light,boxes,n,light_radius)
+    query = lambda ray: refined_depth(ray,light,light_radius,n,fetch,occupied,(0,-60,0))
+    metrics = []
+    for legacy in (True,False):
+        edges = []
+        for row in range(25):
+            y = -59.5+row*.125
+            values = [pcss((9,y,-2+i*.01),(-1,0,0),light,boxes,n,radius,light_radius,
+                           depth_query=None if legacy else query,sampled_depth=raw,legacy_grid=legacy)
+                      for i in range(80)]
+            crossings = [-2+i*.01+(.1-a)/(b-a)*.01
+                         for i,(a,b) in enumerate(zip(values,values[1:]))
+                         if a >= .1 > b]
+            assert len(crossings)==1, ('Disconnected actual-room 10% contour',legacy,y,crossings)
+            edges.append(crossings[0])
+        metrics.append((max(edges)-min(edges),max(abs(a-b) for a,b in zip(edges,edges[1:]))))
+    old,new = metrics
+    assert old[0]>.18 and old[1]>.08, 'Fixture must expose the reported large teeth'
+    assert new[0]<1/16 and new[1]<1/32, ('Refined room contour still has large teeth',metrics)
+    return old,new
 
 
 def check_receiver_hull(radius):
@@ -573,6 +757,8 @@ def main():
     room_cases = check_room_occlusion(radius)
     contour = check_shadow_contour(radius)
     hulls = check_receiver_hull(radius)
+    faces = check_face_refinement()
+    room_contour = check_captured_room_contour(radius)
     print(f'PASS: {tested} ray/camera/large-coordinate comparisons; penumbra widths '
           f'{widths[0]:.3f}->{widths[1]:.3f}; bounded traversal checked; '
           f'octahedral seams and {floors} unoccluded planes stay lit '
@@ -582,10 +768,14 @@ def main():
     print(f'PASS: {room_cases} blocked/open room-wall pairs, Static/Dynamic bias, grazing angles, '
           'six orientations and camera translations; opaque backfaces receive no direct lamp energy')
     print(f'PASS: analytic straight-wall contour, six orientations; worst visibility reversal '
-          f'{contour[0]:.3f}->{contour[2]:.3f}, edge step {contour[1]:.3f}->{contour[3]:.3f} blocks; '
+          f'{contour[0]:.3f}->{contour[2]:.3f}, adjacent 1/16-coverage contour intervals overlap; '
           'near-receiver opaque walls remain blocked')
     print(f'PASS: {hulls} shifted voxel receiver planes stay lit, including slopes; '
           '12 parallel near-receiver slab cases remain fully blocked')
+    print(f'PASS: {faces} quarter-face/corner/tangent and large-coordinate refinements, '
+          'stale-map/empty-volume rejection, occupied-source/range sentinels and both RP volume bindings')
+    print(f'PASS: actual room 10% contour span {room_contour[0][0]:.3f}->{room_contour[1][0]:.3f} blocks, '
+          f'maximum adjacent step {room_contour[0][1]:.3f}->{room_contour[1][1]:.3f}')
 
 
 if __name__ == '__main__':

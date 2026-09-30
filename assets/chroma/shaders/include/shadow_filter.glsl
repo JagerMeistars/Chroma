@@ -2,6 +2,7 @@
 #define CHROMA_SHADOW_FILTER
 #include <chroma:voxel_space.glsl>
 uniform sampler2D ShadowSampler;
+uniform sampler2D VoxelSampler;
 const int CHROMA_SHADOW_RES = 128;
 
 vec3 chromaShadowReceiver(vec3 receiver, vec3 normal) {
@@ -63,10 +64,45 @@ bool chromaShadowReceiverHit(float surfaceOffset, float receiverBias) {
     // arbitrary full voxel; otherwise a clear receiver shadows itself.
     return surfaceOffset >= -0.02 && surfaceOffset <= receiverBias + 0.02;
 }
-vec2 chromaShadowCompare(int lamp, ivec2 pixel, vec3 normal, float surfacePlane, float distance,
-                         float footprint, float lightRadius, float receiverBias, float foregroundLimit) {
-    vec3 direction = chromaShadowDirection(pixel);
-    float depth = chromaShadowDepth(lamp, pixel);
+float chromaShadowRayDepth(int lamp, vec3 direction, vec3 light, float lightRadius) {
+    vec2 p = chromaShadowUV(direction) * float(CHROMA_SHADOW_RES) - 0.5;
+    ivec2 base = ivec2(floor(p));
+    vec3 localLight = light - CameraOffset;
+    float nearest = lightRadius;
+    ivec3 seen = ivec3(2147483647);
+    // Each stored DDA hit lies on a quarter-cell face. Reproject that face
+    // onto the requested ray and check the actual voxel there. Bilinear
+    // comparison of four unrelated rays made a straight silhouette sawtoothed.
+    // This uses the existing map as four geometric candidates, not four binary
+    // coverage samples; no longer ray march or higher-resolution map is needed.
+    for (int i = 0; i < 4; ++i) {
+        ivec2 pixel = base + ivec2(i & 1, i >> 1);
+        float depth = chromaShadowDepth(lamp, pixel);
+        if (depth <= 0.0001) return depth;
+        if (depth >= lightRadius - 0.001) continue;
+        vec3 sampledDirection = chromaShadowDirection(pixel);
+        vec3 hit = localLight + sampledDirection * depth;
+        ivec3 face = ivec3(round(hit * float(CHROMA_VOX_CELLS)));
+        vec3 plane = vec3(face) * CHROMA_VOX_CELL;
+        for (int axis = 0; axis < 3; ++axis) {
+            // Skip tangent coordinates that merely happen to lie on a grid
+            // plane. At genuine edge/corner ties, try each crossed face.
+            if (abs(hit[axis] - plane[axis]) > 0.002
+                    || abs(sampledDirection[axis]) < 0.000001
+                    || abs(direction[axis]) < 0.000001
+                    || seen[axis] == face[axis]) continue;
+            seen[axis] = face[axis];
+            float t = (plane[axis] - localLight[axis]) / direction[axis];
+            if (t <= 0.0 || t >= nearest) continue;
+            ivec3 cell = chromaVoxOf(light + direction * (t + 0.0001));
+            if (chromaVoxConfidence(VoxelSampler, cell) >= 2u) nearest = t;
+        }
+    }
+    return nearest;
+}
+vec2 chromaShadowPCF(int lamp, vec3 direction, vec3 light, vec3 normal, float surfacePlane, float distance,
+                     float footprint, float lightRadius, float receiverBias, float foregroundLimit) {
+    float depth = chromaShadowRayDepth(lamp, direction, light, lightRadius);
     float reference = chromaReceiverDepth(direction, normal, surfacePlane + receiverBias);
     // An empty ray that never reaches this plane inside the source range is
     // not a clear receiver sample. Counting it lit leaks through a nearby slab.
@@ -84,17 +120,6 @@ vec2 chromaShadowCompare(int lamp, ivec2 pixel, vec3 normal, float surfacePlane,
     // grazing intersection before the receiver cannot prove the rest is clear.
     reference = reference > 1e5 ? distance : max(distance, reference);
     return vec2(step(reference - 0.02, depth), 1.0);
-}
-vec2 chromaShadowPCF(int lamp, vec3 direction, vec3 normal, float surfacePlane, float distance,
-                     float footprint, float lightRadius, float receiverBias, float foregroundLimit) {
-    vec2 p = chromaShadowUV(direction) * float(CHROMA_SHADOW_RES) - 0.5;
-    ivec2 base = ivec2(floor(p));
-    vec2 w = fract(p);
-    vec2 a = chromaShadowCompare(lamp, base, normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit);
-    vec2 b = chromaShadowCompare(lamp, base + ivec2(1,0), normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit);
-    vec2 c = chromaShadowCompare(lamp, base + ivec2(0,1), normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit);
-    vec2 d = chromaShadowCompare(lamp, base + ivec2(1,1), normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit);
-    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
 }
 float chromaShadowFallbackDepth(int lamp, ivec2 pixel, vec3 normal, float plane, float lightRadius) {
     float depth = chromaShadowDepth(lamp, pixel);
@@ -155,13 +180,13 @@ float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float light
         }
     }
     if (blockers == 0.0) {
-        vec2 center = chromaShadowPCF(lamp, axis, normal, surfacePlane, distance, texelFootprint, lightRadius, receiverBias, distance);
+        vec2 center = chromaShadowPCF(lamp, axis, light, normal, surfacePlane, distance, texelFootprint, lightRadius, receiverBias, distance);
         return center.y > 0.00001 ? center.x / center.y : chromaShadowFallback(lamp, axis, normal, plane, distance, lightRadius);
     }
     float blocker = blockerSum / blockers;
     float penumbra = CHROMA_SOURCE_SIZE * max(distance - blocker, 0.0)
                    / max(distance * blocker, 0.01);
-    // Bilinear comparison plus a source-sized disk, all in world directions.
+    // Geometric samples across a source-sized disk, all in world directions.
     float filterAngle = max(penumbra, 0.7 / float(CHROMA_SHADOW_RES));
     float footprint = distance * filterAngle + texelFootprint;
     // A receiver-plane hit beyond the local blockers is useful lit evidence,
@@ -176,7 +201,7 @@ float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float light
         float angle = float(i) * 2.39996323;
         float radius = sqrt((float(i) + 0.5) / 16.0) * filterAngle;
         vec3 ray = normalize(axis + radius * (cos(angle) * tangent + sin(angle) * bitangent));
-        visible += chromaShadowPCF(lamp, ray, normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit);
+        visible += chromaShadowPCF(lamp, ray, light, normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit);
     }
     return visible.y > 0.00001 ? visible.x / visible.y : chromaShadowFallback(lamp, axis, normal, plane, distance, lightRadius);
 }

@@ -82,6 +82,14 @@ void main() {
         suv.y = (float(cleanY) + 0.5) / float(frameSize.y);
     }
     float d = chromaDepth(suv);
+#if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK
+    // Opaque particles keep their native colour/depth test and carry alpha=0
+    // as an observed-geometry exclusion tag. OIT particles use the depth tag.
+    if (d > 0.000001 && texelFetch(InSampler, ivec2(suv * vec2(frameSize)), 0).a < 0.5 / 255.0) {
+        fragColor = vec4(albedo, 1.0);
+        return;
+    }
+#endif
     // The hand/3D-HUD integration hook marks only covered pixels. Preserve their
     // vanilla color instead of interpreting their different projection as world.
     if (d >= 0.999999) {
@@ -139,6 +147,11 @@ void main() {
     vec3 worldReceiver = cameraInvRot * fragPos;
     vec3 worldNormal = cameraInvRot * normal;
     worldReceiver = chromaShadowReceiver(worldReceiver, worldNormal);
+    vec3 lightReceiver = fragPos;
+#if CHROMA_SHADOW_PIXELATE
+    // Falloff, cone edges and shadows use the same world-grid surface sample.
+    lightReceiver = transpose(cameraInvRot) * worldReceiver;
+#endif
     vec4 previousShadowSource = vec4(0.0);
     float previousVisibility = 1.0;
     while ((mask0 | mask1 | mask2 | mask3) != 0u) {
@@ -154,7 +167,7 @@ void main() {
         int lShape = chromaMdLampShapeOf(MatDecSampler, k);
         float surfaceWeight = 0.0;
         if (!isSky) {
-            vec3 toL = lPos - fragPos;
+            vec3 toL = lPos - lightReceiver;
             float dist = length(toL);
             if (dist <= lRad) {
                 vec3 L = toL / max(dist, 1e-4);

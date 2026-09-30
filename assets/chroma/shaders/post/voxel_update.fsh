@@ -7,6 +7,9 @@
 uniform sampler2D PrevSampler;
 uniform sampler2D MetaSampler;
 uniform sampler2D InDepthSampler;
+#if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK
+uniform sampler2D MainColorSampler;
+#endif
 uniform sampler2D MatDecSampler;
 uniform sampler2D CatalogSampler;
 layout(location = 0) out vec4 fragColor;
@@ -20,6 +23,12 @@ layout(location = 0) out vec4 fragColor;
 bool evidencePixel(ivec2 p, ivec2 size) {
     if (any(lessThan(p, ivec2(2))) || any(greaterThanEqual(p, size - 2))) return false;
     if (chromaAutoHeaderPixel(p, size)) return false;
+    #if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK
+    // Opaque particles preserve RGB/depth and mark only their unused alpha.
+    // Sky alpha can also be zero: actual zero-depth sky remains valid vacancy.
+    if (texelFetch(MainColorSampler, p, 0).a < 0.5 / 255.0 &&
+        texelFetch(InDepthSampler, p, 0).r > 0.000001) return false;
+    #endif
     return !chromaCatalogHas(CatalogSampler, chromaRawAddressAtPixel(p, size));
 }
 bool projectPixel(vec3 eye, mat4 projection, ivec2 size, out ivec2 p) {
