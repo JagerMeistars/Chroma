@@ -1,35 +1,36 @@
 # Chroma
 
-**Coloured lights and world-space shadows for Minecraft Java 26.3.**
-A vanilla resource pack with up to **128 simultaneous lights**, five light shapes, and independent colour, brightness, range and direction. No required mods or datapacks. WorldEntities is the main edition.
+## English
 
-**Цветной свет и мировые тени для Minecraft Java 26.3.**
-До **128 источников одновременно**, пять форм света, настройка цвета, яркости, радиуса и направления. Для обычных ламп достаточно ресурспака и команд. Основная версия — WorldEntities.
+Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource pack with up to 128 lights in five shapes.
 
-**[Download / Скачать](https://github.com/JagerMeistars/Chroma/releases/latest)** · **[Русская инструкция](docs/README.ru.md)** · **[English guide](docs/README.en.md)**
+### Start
 
-## Start / Начать
+1. Download Chroma from [Releases](https://github.com/JagerMeistars/Chroma/releases/latest).
+2. Put the ZIP in `minecraft/resourcepacks`, enable it, and turn on **Improved Transparency**.
+3. Follow the [English guide](docs/README.en.md) to spawn and configure lights.
 
-1. Put `Chroma-Shadows-Dynamic-26.3.zip` in `minecraft/resourcepacks` and enable it. / Положи ZIP в `minecraft/resourcepacks` и включи его.
-2. Enable **Improved Transparency** and use only one Chroma pack. / Включи **Improved Transparency** и оставь активным только один Chroma.
-3. Open the guide above for a ready-to-copy summon command, all five shapes and settings. / В инструкции выше есть готовая команда создания, все пять видов и настройки.
+### Guides
 
-The optional `Chroma-Flashlight-Test-26.3.zip` adds a player-following flashlight. Its installation and two control commands are in the same guide. / Необязательный датапак фонарика следует за игроком; установка и команды — в той же инструкции.
+- [English player guide](docs/README.en.md)
+- [Русское руководство](docs/README.ru.md)
 
-Lighting is visual: it does not change mob spawning or block light levels. Dynamic shadows use geometry already seen by the camera; hidden changes can remain unknown. / Свет визуальный: он не меняет спавн мобов и уровень освещения блоков. Тени используют уже увиденную геометрию; изменения за камерой могут оставаться неизвестными.
+## Русский
 
-## Development / Разработка
+Цветной свет и мировые тени для **Minecraft Java 26.3**. Ресурспак без модов: до 128 источников пяти форм.
 
-Build with Python 3; no extra packages are needed for these commands:
+### Начать
 
-```sh
-python tools/build.py
-python tools/build_flashlight.py
-```
+1. Скачай Chroma в [релизах](https://github.com/JagerMeistars/Chroma/releases/latest).
+2. Положи ZIP в `minecraft/resourcepacks`, включи его и **Improved Transparency**.
+3. Инструкция по [созданию и настройке источников](docs/README.ru.md).
 
-ZIPs are written to `dist/`. / ZIP-файлы появятся в `dist/`.
+### Руководства
 
-- [Build and validation tools / Сборка и проверки](https://github.com/JagerMeistars/Chroma/blob/main/tools/README.md)
-- [Technical shadow reference / Техническая справка по теням](https://github.com/JagerMeistars/Chroma/blob/main/docs/SHADOWS.md)
-- [Archived Auto edition without shadows / Прежний Auto без теней](https://github.com/JagerMeistars/Chroma/tree/codex/auto)
-- [Credits and provenance / Авторы и происхождение](CREDITS.md)
+- [Русское руководство](docs/README.ru.md)
+- [English player guide](docs/README.en.md)
+- [Справка о тенях](docs/SHADOWS.md)
+
+---
+
+[Credits](CREDITS.md)

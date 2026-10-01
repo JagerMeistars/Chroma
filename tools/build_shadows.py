@@ -122,7 +122,7 @@ def main():
     replacements = {CHAIN: (json.dumps(chain,indent=2)+'\n').encode()}
     kind = 'Static' if volume else 'Dynamic'
     meta = json.loads((ROOT/'pack.mcmeta').read_text(encoding='utf-8'))
-    title = f'Chroma Shadows {kind}' + ('' if volume else ' WorldEntities2') + (' Debug' if args.debug else '')
+    title = 'Chroma 26.3' + (' Static' if volume else '') + (' Debug' if args.debug else '')
     meta['pack']['description'] = f'{title} · 128 lights / 128 источников · 26.3'
     replacements['pack.mcmeta'] = (json.dumps(meta, ensure_ascii=False, indent=2)+'\n').encode()
     config = (ROOT/CONFIG).read_text()
