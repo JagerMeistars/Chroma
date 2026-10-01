@@ -21,9 +21,9 @@
 #define SPOT_COS_OUTER    0.88
 #define DOME_EDGE         0.25
 
-// Fog is applied even when no marker is visible. Set density to zero to disable.
+// Optional extra fog affects the whole scene, even without lamps. Off by default.
 #define FOG_COLOR    vec3(0.05, 0.06, 0.09)
-#define FOG_DENSITY  0.016
+#define FOG_DENSITY  0.0
 #define FOG_MAX      0.85
 #define FOG_SKY      0.5
 

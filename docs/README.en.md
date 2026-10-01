@@ -77,7 +77,7 @@ Edit `assets/chroma/shaders/include/shadow_config.glsl`:
 | `CHROMA_SOURCE_SIZE` | `0.35`: source radius; larger values produce softer shadows |
 | `CHROMA_SHADOW_SAMPLES` | `16`: normal quality; `8`: fewer samples, potentially faster but coarser |
 
-Disable fog with `FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`. Disable hemisphere flicker with `CHROMA_FLICKER_AMOUNT 0.0` in `assets/chroma/shaders/include/flicker.glsl`.
+Chroma's extra fog is off by default (`FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`). Disable hemisphere flicker with `CHROMA_FLICKER_AMOUNT 0.0` in `assets/chroma/shaders/include/flicker.glsl`.
 
 ## Optional flashlight
 
@@ -95,4 +95,4 @@ Stop with `/function chroma_flashlight:stop` before removing the datapack. It cr
 - Up to **128 simultaneously rendered lamps**. Sources must be loaded and rendered; many overlapping lights can reduce FPS.
 - Objects you have not looked at may cast incorrect shadows. Look at an area after moving or changing blocks there. Press **F3+T** after changing worlds or dimensions.
 - Chroma uses the surface's existing colour and texture; its brightness also depends on vanilla lighting.
-- Everything is **visual**: block-light levels and mob spawning do not change. Fog can remain visible without lamps.
+- Everything is **visual**: block-light levels and mob spawning do not change.
