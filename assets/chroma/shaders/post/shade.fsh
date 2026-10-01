@@ -13,6 +13,7 @@
 #define LIGHT_STRENGTH    0.3
 
 #define LOOK_CORE         4.0
+#define LIGHT_REFERENCE   0.25
 #define LOOK_FULL_LUM     3.0
 #define FALLOFF_CORE      0.15
 
@@ -46,6 +47,7 @@ float chromaDepth(vec2 uv) {
 layout(location = 0) in vec2 texCoord;
 layout(location = 1) flat in int cameraValid;
 layout(location = 2) flat in mat4 cameraInvProj;
+layout(location = 6) flat in mat4 cameraProj;
 layout(location = 10) flat in vec3 cameraDown;
 layout(location = 11) flat in int autoLastAddress;
 layout(location = 12) flat in mat3 cameraInvRot;
@@ -63,10 +65,12 @@ vec3 reconstructEyePosAt(vec2 uv, float d, mat4 invProj) {
     return eye.xyz / eye.w;
 }
 
+#include <chroma:entity_shadow.glsl>
+
 // Camera matrices are decoded once per screen-triangle vertex. Each shaded
 // pixel visits only the sources in its tile.
 void main() {
-    vec3 albedo = texture(InSampler, texCoord).rgb;
+    vec3 sceneColor = texture(InSampler, texCoord).rgb;
     vec2 suv = texCoord;
     ivec2 ipx = ivec2(gl_FragCoord.xy);
     ivec2 frameSize = textureSize(InSampler, 0);
@@ -78,7 +82,7 @@ void main() {
             cleanY = chromaAutoOrigin(address, frameSize).y - 1;
     }
     if (cleanY >= 0) {
-        albedo = texelFetch(InSampler, ivec2(ipx.x, cleanY), 0).rgb;
+        sceneColor = texelFetch(InSampler, ivec2(ipx.x, cleanY), 0).rgb;
         suv.y = (float(cleanY) + 0.5) / float(frameSize.y);
     }
     float d = chromaDepth(suv);
@@ -86,14 +90,14 @@ void main() {
     // Opaque particles keep their native colour/depth test and carry alpha=0
     // as an observed-geometry exclusion tag. OIT particles use the depth tag.
     if (d > 0.000001 && texelFetch(InSampler, ivec2(suv * vec2(frameSize)), 0).a < 0.5 / 255.0) {
-        fragColor = vec4(albedo, 1.0);
+        fragColor = vec4(sceneColor, 1.0);
         return;
     }
 #endif
     // The hand/3D-HUD integration hook marks only covered pixels. Preserve their
     // vanilla color instead of interpreting their different projection as world.
     if (d >= 0.999999) {
-        fragColor = vec4(albedo, 1.0);
+        fragColor = vec4(sceneColor, 1.0);
         return;
     }
     bool isSky = d <= 0.000001;
@@ -101,11 +105,11 @@ void main() {
     float fogF = (1.0 - exp(-fogDist * FOG_DENSITY)) * (isSky ? FOG_SKY : 1.0);
     fogF = min(fogF, FOG_MAX);
     if (isSky) {
-        float skyLum = dot(albedo, vec3(0.2125, 0.7154, 0.0721));
+        float skyLum = dot(sceneColor, vec3(0.2125, 0.7154, 0.0721));
         fogF *= 1.0 - smoothstep(0.08, 0.25, skyLum);
     }
     if (cameraValid == 0) {
-        fragColor = vec4(mix(albedo, FOG_COLOR, fogF), 1.0);
+        fragColor = vec4(mix(sceneColor, FOG_COLOR, fogF), 1.0);
         return;
     }
     ivec2 tileSize = textureSize(TileSampler, 0);
@@ -120,7 +124,7 @@ void main() {
     uint mask2 = maskBytes2.r | (maskBytes2.g << 8) | (maskBytes2.b << 16) | (maskBytes2.a << 24);
     uint mask3 = maskBytes3.r | (maskBytes3.g << 8) | (maskBytes3.b << 16) | (maskBytes3.a << 24);
     if ((mask0 | mask1 | mask2 | mask3) == 0u) {
-        fragColor = vec4(mix(albedo, FOG_COLOR, fogF), 1.0);
+        fragColor = vec4(mix(sceneColor, FOG_COLOR, fogF), 1.0);
         return;
     }
 
@@ -152,6 +156,11 @@ void main() {
 #if CHROMA_SHADOW_PIXELATE
     // Falloff, cone edges and shadows use the same world-grid surface sample.
     lightReceiver = transpose(cameraInvRot) * worldReceiver;
+#endif
+#if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS == 2 && CHROMA_TRANSPARENT_DEPTH_MASK
+    // Keep receiving normal Chroma/world shadows, without contact self-shadow.
+    bool entityReceiver = chromaEntityShadowTag(texelFetch(InSampler,
+        ivec2(suv * vec2(frameSize)), 0).a);
 #endif
     vec4 previousShadowSource = vec4(0.0);
     float previousVisibility = 1.0;
@@ -195,6 +204,10 @@ void main() {
                     if (any(notEqual(shadowSource, previousShadowSource))) {
                         previousVisibility = chromaShadow(k, worldReceiver,
                             worldNormal, cameraInvRot * lPos, lRad);
+#if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS == 2 && CHROMA_TRANSPARENT_DEPTH_MASK
+                        if (previousVisibility > 0.0 && !entityReceiver)
+                            previousVisibility *= chromaEntityShadow(lightReceiver, normal, lPos, frameSize);
+#endif
                         previousShadowSource = shadowSource;
                     }
                     visibility = previousVisibility;
@@ -209,29 +222,35 @@ void main() {
         radiance += lCol * (lInt * surfaceWeight);
         // Saturate each lamp's response before applying shadow coverage. A
         // bright lamp's first visible sample must not fill the whole penumbra.
-        // RGB still uses actual shadowed energy; fully lit output is unchanged,
-        // and a blocked lamp contributes nothing to another lamp's response.
+        // RGB uses actual shadowed energy, and a blocked lamp contributes
+        // nothing to another lamp's response.
         float unshadowedLum = dot(lCol, vec3(0.2125, 0.7154, 0.0721)) * lInt * unshadowedWeight;
         reachLum += min(unshadowedLum, LOOK_FULL_LUM) * visibility;
     }
 
     float radLum = dot(radiance, vec3(0.2125, 0.7154, 0.0721));
-    vec3 outc = albedo;
+    vec3 lightResponse = vec3(0.0);
     float reach = 0.0;
     if (radLum > 1e-4) {
         vec3 hueDir = radiance / radLum;
         float env = smoothstep(0.0, LOOK_FULL_LUM, reachLum);
-        outc = albedo * (1.0 + hueDir * LOOK_CORE);
+        // Main RGB already includes vanilla lighting. Evaluate the lamp on a
+        // fixed neutral reference, never by multiplying the lit scene again.
+        // ponytail: main has no unlit material RGB; neutral-reference addition
+        // keeps energy stable. Exact reflectance needs material data upstream.
+        lightResponse = vec3(LIGHT_REFERENCE) * (1.0 + hueDir * LOOK_CORE);
 #if ENABLE_ACES
-        vec3 perCh = aces(outc);
-        float lumIn = dot(outc, vec3(0.2125, 0.7154, 0.0721));
+        vec3 perCh = aces(lightResponse);
+        float lumIn = dot(lightResponse, vec3(0.2125, 0.7154, 0.0721));
         float lumOut = aces(vec3(lumIn)).r;
-        vec3 hue = outc * (lumOut / max(lumIn, 1e-4));
-        outc = mix(perCh, hue, TONE_SAT);
+        vec3 hue = lightResponse * (lumOut / max(lumIn, 1e-4));
+        lightResponse = mix(perCh, hue, TONE_SAT);
 #endif
         reach = env;
     }
-    outc = mix(albedo, outc, reach);
+    // Add only Chroma's response; vanilla lamps/daylight cannot amplify it.
+    // Texture differences remain additive until the final LDR target clips.
+    vec3 outc = sceneColor + max(lightResponse - vec3(LIGHT_REFERENCE), vec3(0.0)) * reach;
     outc = mix(outc, FOG_COLOR, fogF);
     fragColor = vec4(outc, 1.0);
 #if CHROMA_SHADOW_DEBUG

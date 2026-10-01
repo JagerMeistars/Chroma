@@ -65,8 +65,11 @@ def main():
 
     voxel = (ROOT/'assets/chroma/shaders/post/voxel_update.fsh').read_text()
     assert 'uniform sampler2D MainColorSampler;' in voxel
-    assert 'texelFetch(MainColorSampler, p, 0).a < 0.5 / 255.0' in voxel
-    assert 'texelFetch(InDepthSampler, p, 0).r > 0.000001' in voxel
+    support = (ROOT/'assets/chroma/shaders/include/depth_support.glsl').read_text()
+    assert '#include <chroma:depth_support.glsl>' in voxel
+    assert 'metadataAlpha = texelFetch(MainColorSampler, p, 0).a' in support
+    assert 'metadataAlpha < 0.5 / 255.0' in support
+    assert 'texelFetch(InDepthSampler, p, 0).r > 0.000001' in support
     shade = (ROOT/'assets/chroma/shaders/post/shade.fsh').read_text()
     assert 'd > 0.000001 && texelFetch(InSampler, ivec2(suv * vec2(frameSize)), 0).a < 0.5 / 255.0' in shade
     chain = json.loads((ROOT/'assets/minecraft/post_effect/end_of_frame.json').read_text())

@@ -10,6 +10,7 @@ import com.mojang.renderpearl.api.pipeline.ShaderType;
 import com.mojang.renderpearl.frontend.shaders.SPIRVModule;
 import net.minecraft.resources.Identifier;
 import net.minecraft.client.renderer.PostChainConfig;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.server.packs.metadata.pack.PackFormat;
 import net.minecraft.server.packs.PackType;
 import org.lwjgl.util.shaderc.*;
@@ -79,7 +80,17 @@ public class ValidatePack {
         int compiled = 0;
         for (String path : shaderPaths) {
             boolean vertex = path.endsWith(".vsh");
-            long result = shaderc_compile_into_spv(compiler, read(path), vertex ? shaderc_vertex_shader : shaderc_fragment_shader, path, "main", options);
+            long stageOptions = options;
+            // This native shader exists only as an OIT pipeline. Its wavelet
+            // declarations require the installed pipeline's actual defines.
+            if (path.equals("assets/minecraft/shaders/core/oit_composite.fsh")) {
+                stageOptions = shaderc_compile_options_clone(options);
+                final long oitOptions = stageOptions;
+                var defines = RenderPipelines.OIT_COMPOSITE.getShaderDefines();
+                defines.values().forEach((k,v) -> shaderc_compile_options_add_macro_definition(oitOptions,k,v));
+                defines.flags().forEach(k -> shaderc_compile_options_add_macro_definition(oitOptions,k,""));
+            }
+            long result = shaderc_compile_into_spv(compiler, read(path), vertex ? shaderc_vertex_shader : shaderc_fragment_shader, path, "main", stageOptions);
             if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) {
                 fail(path + "\n" + shaderc_result_get_error_message(result));
             } else {
@@ -96,6 +107,7 @@ public class ValidatePack {
                 }
             }
             shaderc_result_release(result);
+            if (stageOptions != options) shaderc_compile_options_release(stageOptions);
         }
         int terrainVariants = 0;
         for (String[] defines : List.of(new String[]{"ALPHA_CUTOUT=0.5"}, new String[]{"ALPHA_CUTOUT=0.5", "MULTIDRAW_TERRAIN"}, new String[]{"ALPHA_CUTOUT=0.1"}, new String[]{"ALPHA_CUTOUT=0.1", "MULTIDRAW_TERRAIN"}, new String[]{"ALPHA_CUTOUT=0.1", "OIT_ALPHA_ONLY"}, new String[]{"ALPHA_CUTOUT=0.1", "OIT_ALPHA_ONLY", "MULTIDRAW_TERRAIN"})) {

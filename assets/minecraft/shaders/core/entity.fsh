@@ -4,6 +4,7 @@
 #include <minecraft:globals.glsl>
 #include <minecraft:projection.glsl>
 #include <chroma:ferry_guard.glsl>
+#include <chroma:shadow_config.glsl>
 #include <minecraft:fog.glsl>
 #include <minecraft:dynamictransforms.glsl>
 #include <minecraft:oit.glsl>
@@ -187,5 +188,14 @@ void main() {
     executeAlphaOnlyPhase(gl_FragCoord.z, color.a);
     #else
     fragColor = calculateFinalColor(color);
+
+    #if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS != 1 && CHROMA_TRANSPARENT_DEPTH_MASK && !defined(OIT)
+    // Improved Transparency ON routes blended entities through OIT. Only the
+    // remaining opaque/cutout draw may use unused framebuffer alpha metadata.
+    // Preserve native cutout, RGB, depth and all marker packets above. Mode 0/2
+    // excludes this entity-shader group from persistent caster acquisition;
+    // nonzero metadata still lets these surfaces receive Chroma lighting.
+    if (fragColor.a >= 254.5 / 255.0) fragColor.a = 1.0 / 255.0;
+    #endif
     #endif
 }

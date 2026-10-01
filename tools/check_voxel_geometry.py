@@ -122,7 +122,7 @@ class DepthScene:
             normal = np.eye(3)[axis] * np.sign(normal[axis])
         surface_world = self.rotation.T @ surface + self.camera
         plane_offset = (surface_world - centre) @ normal
-        plane_limit = .15 if old else CELL * .5 * np.sum(abs(normal)) + .02
+        plane_limit = .15 if old else CELL * .5 * np.sum(abs(normal)) + CELL * .08
         if not old and abs(plane_offset) > plane_limit:
             return False
         probe = centre + normal * (CELL * .5 if old else plane_offset)
@@ -132,7 +132,7 @@ class DepthScene:
         hit = self.rotation.T @ hit_eye + self.camera
         if np.linalg.norm(hit - probe) > .15 or abs((hit - centre) @ normal) > plane_limit:
             return False
-        hit_cell = np.floor((hit - normal * .02) / CELL).astype(int)
+        hit_cell = np.floor((hit - normal * (CELL * .08)) / CELL).astype(int)
         return hit_cell[axis] == voxel[axis] if old else np.array_equal(hit_cell, voxel)
 
 
@@ -277,18 +277,24 @@ def check_footprint_vacancy():
 
 
 def check():
-    source = (Path(__file__).resolve().parents[1] /
+    root = Path(__file__).resolve().parents[1]
+    source = (root /
               'assets/chroma/shaders/post/voxel_update.fsh').read_text()
-    assert 'distanceZ[horizontal] > 1.0 || distanceZ[vertical] > 1.0' in source
-    assert 'all(equal(hitCell, voxel))' in source
+    support = (root / 'assets/chroma/shaders/include/depth_support.glsl').read_text()
+    assert 'distanceZ[horizontal] > 1.0 || distanceZ[vertical] > 1.0' in support
+    assert 'all(equal(hitCell, expectedCell))' in source
     assert 'vec3 probe = centre + normal * planeOffset;' in source
-    assert 'if (abs(planeOffset) > planeLimit) return unresolved;' in source
-    assert 'previous > 0u && planeOffset <= -cellExtent + 0.001' in source
-    assert 'if (clearPlane) return 0u;' in source
-    assert source.index('if (all(equal(hitCell, voxel))) return 3u;') < source.index('if (clearPlane) return 0u;')
-    assert 'else if (confidence >= 2u) confidence = clearObservedAir' in source
-    assert '(oldWord & 0xAAAAAAAAu) == 0u' in source
-    assert 'confidence < previousConfidence' in source and '!footprintVacant(voxel, projection, inverseProjection, rotation, size)' in source
+    assert 'if (abs(planeOffset) > planeLimit) return;' in source
+    assert 'void observeBox(' in source and 'clearPlane' not in source
+    clear = source.index('if (!positive && any(hadPlane)')
+    assert source.index('observeBox(chromaVoxCentre(voxel)') < clear < source.index('bool refine = positive || any(hadPlane);')
+    assert 'footprintVacant(voxel, cameraProj, cameraInvProj, cameraRot, size)' in source[clear:clear + 250]
+    assert 'fragColor = vec4(0.0); return;' in source[clear:clear + 250]
+    assert 'clearObservedAir' not in source, 'Surface retention no longer uses coarse eye-depth confidence decay'
+    assert 'retained && !updateSlice' in source and 'chromaVoxEncode(records[slot])' in source
+    assert 'footprintVacant(voxel, cameraProj, cameraInvProj, cameraRot, size)' in source, 'Overflow full-cell removal still requires volume proof'
+    assert 'planePatchVacant(voxel, point, normal, axis, bit, size)' in source, 'Retained surface bits need their plane footprint'
+    assert 'mask |= positives;' in source, 'Current surface hits must win over background patch probes'
     assert 'vec3 direction = inverseRotation * (farEye - nearEye);' in source
     assert 'eyeAt(pixel, 1.0, inverseProjection, size)' in source
     assert 'eyeAt(pixel, 0.001, inverseProjection, size)' in source
@@ -391,7 +397,7 @@ def check():
     print(f'Removed actor: {clear}/{len(cached)} cached surface cells are proven vacant immediately.')
     print('Contact-plane regression: both former leg cells clear; the adjacent solid floor cell remains.')
     print(f'Fixed-view tiny caster: old {old_sequence}; fixed {fixed_sequence}; removal clears to 0.')
-    print('Visible vacancies are checked every frame; hidden edits and sub-quarter-cell detail remain limited.')
+    print('Legacy CPU reference checks visible vacancies immediately; current Dynamic updates eight slices and stores masked surfaces. Hidden edits remain limited.')
     print('CPU FOOTPRINT PASS: exact vacancy footprint holds the two-millimetre fence motion, '
           'clears removed fence/block/contact cells and retains hidden/clipped cells;',check_footprint_vacancy())
 

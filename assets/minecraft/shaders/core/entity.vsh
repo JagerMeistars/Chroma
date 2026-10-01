@@ -60,15 +60,22 @@ layout(location = 12) flat out int chromaShape;
 layout(location = 13) flat out vec3 chromaFacing;
 layout(location = 14) flat out int chromaSlot;
 
-// R/G identify Chroma. B carries shape, local corner, and header/payload kind.
+// Validate the complete marker code. Ordinary blue textures can share R/G,
+// especially at an atlas corner whose padding repeats one texel five times.
+bool chromaMatchSample(vec4 value, int identity) {
+    int code = int(value.b * 255.0 + 0.5);
+    return value.a >= 254.5 / 255.0 && (code & 192) == 0 &&
+           (code & 7) <= 4 && (code & 39) == identity &&
+           all(lessThan(abs(value.rg - vec2(76.0, 195.0) / 255.0), vec2(3.0 / 255.0)));
+}
 bool chromaMatchKey(vec2 uv, vec2 tx) {
-    vec2 tolerance = vec2(3.0 / 255.0);
-    vec2 key = vec2(76.0, 195.0) / 255.0;
-    return all(lessThan(abs(textureLod(Sampler0, uv, 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv + vec2(tx.x, 0.0), 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv - vec2(tx.x, 0.0), 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv + vec2(0.0, tx.y), 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv - vec2(0.0, tx.y), 0.0).rg - key), tolerance));
+    vec4 value = textureLod(Sampler0, uv, 0.0);
+    int identity = int(value.b * 255.0 + 0.5) & 39; // Shape and header; corner varies.
+    return chromaMatchSample(value, identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv + vec2(tx.x, 0.0), 0.0), identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv - vec2(tx.x, 0.0), 0.0), identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv + vec2(0.0, tx.y), 0.0), identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv - vec2(0.0, tx.y), 0.0), identity);
 }
 
 void main() {
@@ -114,7 +121,8 @@ void main() {
     chromaFacing = vec3(0.0, 0.0, -1.0);
     chromaSlot = 0;
     vec2 chromaTexel = 1.0 / vec2(textureSize(Sampler0, 0));
-    if (chromaMatchKey(UV0, chromaTexel)) {
+    // Markers carry world-camera data; orthographic inventory/GUI stays native.
+    if (ProjMat[2][3] != 0.0 && chromaMatchKey(UV0, chromaTexel)) {
         int variant = int(textureLod(Sampler0, UV0, 0.0).b * 255.0 + 0.5);
         int corner = (variant >> 3) & 3;
         bool header = (variant & 32) != 0;

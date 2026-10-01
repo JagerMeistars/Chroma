@@ -21,10 +21,10 @@ def render_pass(shader, output, inputs, vertex='minecraft:core/screenquad'):
 
 def configure(chain, volume=None):
     chain = json.loads(json.dumps(chain))
-    chain['targets'] = {k: v for k, v in chain['targets'].items() if not k.startswith(('voxel','shadow_'))}
-    chain['passes'] = [p for p in chain['passes'] if not p['output'].startswith(('voxel','shadow_'))]
+    chain['targets'] = {k: v for k, v in chain['targets'].items() if not k.startswith(('voxel','shadow_','surface_normal','vacancy_'))}
+    chain['passes'] = [p for p in chain['passes'] if not p['output'].startswith(('voxel','shadow_','surface_normal','vacancy_'))]
     shade = next(p for p in chain['passes'] if p['fragment_shader'] == 'chroma:post/shade')
-    shade['inputs'] = [i for i in shade['inputs'] if not i['sampler_name'].startswith(('Voxel','Shadow'))]
+    shade['inputs'] = [i for i in shade['inputs'] if not i['sampler_name'].startswith(('Voxel','Shadow','Surface'))]
     voxel_inputs=[]
     if volume:
         dims = volume['dims']
@@ -35,20 +35,35 @@ def configure(chain, volume=None):
                 location=f'chroma:shadows/{name}', width=nx // 16 * nz, height=ny,
                 bilinear=False))
     else:
-        for name, width, height in (('voxel',4096,256), ('voxel_history',4096,256),
+        chain['targets']['surface_normal'] = {}
+        for name, width, height in (('voxel',4096,16384), ('voxel_history',4096,16384),
                 ('voxel_meta',8,1), ('voxel_meta_history',8,1),
                 ('voxel_lod1',1024,128), ('voxel_lod2',256,64)):
             chain['targets'][name] = dict(width=width, height=height, persistent=True)
         updates = [
+            render_pass('surface_normal','surface_normal',[
+                target_input('MatDec','matdec'), target_input('Meta','voxel_meta_history'),
+                target_input('InDepth','minecraft:main',use_depth_buffer=True),
+                target_input('MainColor','minecraft:main'), target_input('Catalog','catalog')],
+                vertex='chroma:post/voxel_update'),
+            render_pass('vacancy_depth','vacancy_depth',[
+                target_input('InDepth','minecraft:main',use_depth_buffer=True),
+                target_input('MainColor','minecraft:main'), target_input('Catalog','catalog')]),
             render_pass('voxel_update','voxel',[
                 target_input('Prev','voxel_history'), target_input('Meta','voxel_meta_history'),
                 target_input('InDepth','minecraft:main',use_depth_buffer=True),
+                target_input('SurfaceNormal','surface_normal'),
                 target_input('MainColor','minecraft:main'),
-                target_input('MatDec','matdec'), target_input('Catalog','catalog')]),
+                target_input('MatDec','matdec'), target_input('Catalog','catalog'),
+                target_input('VacancyDepth','vacancy_depth')], vertex='chroma:post/voxel_update'),
             render_pass('voxel_meta','voxel_meta',[
                 target_input('Meta','voxel_meta_history'), target_input('MatDec','matdec')]),
-            render_pass('voxel_lod','voxel_lod1',[target_input('In','voxel')]),
-            render_pass('voxel_lod','voxel_lod2',[target_input('In','voxel_lod1')]),
+            render_pass('voxel_lod','voxel_lod1',[
+                target_input('In','voxel'), target_input('MatDec','matdec'),
+                target_input('Meta','voxel_meta_history')], vertex='chroma:post/voxel_update'),
+            render_pass('voxel_lod','voxel_lod2',[
+                target_input('In','voxel_lod1'), target_input('MatDec','matdec'),
+                target_input('Meta','voxel_meta_history')], vertex='chroma:post/voxel_update'),
         ]
         at = chain['passes'].index(shade)
         chain['passes'][at:at] = updates
@@ -56,7 +71,9 @@ def configure(chain, volume=None):
             voxel_inputs.append(target_input(sampler,target))
         at = len(chain['passes']) - 1
         chain['passes'][at:at] = [
-            render_pass('copy','voxel_history',[target_input('In','voxel')]),
+            render_pass('voxel_history','voxel_history',[
+                target_input('In','voxel'), target_input('MatDec','matdec'),
+                target_input('Meta','voxel_meta_history')], vertex='chroma:post/voxel_update'),
             render_pass('copy','voxel_meta_history',[target_input('In','voxel_meta')]),
         ]
     for name,width,height in (('shadow_map',2048,1024),('shadow_map_history',2048,1024),
@@ -71,11 +88,22 @@ def configure(chain, volume=None):
     chain['passes'][at:at]=[
         render_pass('shadow_meta','shadow_meta',[target_input('MatDec','matdec')]),
         render_pass('shadow_map','shadow_map',shadow_inputs)]
+    if not volume:
+        chain['targets']['shadow_surface'] = dict(width=2048, height=1024, persistent=True)
+        at = chain['passes'].index(shade)
+        chain['passes'].insert(at, render_pass('shadow_surface', 'shadow_surface', [
+            target_input('Shadow', 'shadow_map'), target_input('MatDec', 'matdec'),
+            target_input('CurrentShadowMeta', 'shadow_meta'),
+            target_input('PreviousShadowMeta', 'shadow_meta_history'),
+            target_input('VoxelMeta', 'voxel_meta'), *voxel_inputs[:2]]))
+        shade['inputs'].append(target_input('Surface', 'shadow_surface'))
     shade['inputs'].append(target_input('Shadow','shadow_map'))
-    shade['inputs'].append(voxel_inputs[0])
+    shade['inputs'].extend(voxel_inputs[:1] if volume else voxel_inputs[:2])
     chain['passes'][-1:-1]=[
         render_pass('copy','shadow_map_history',[target_input('In','shadow_map')]),
         render_pass('copy','shadow_meta_history',[target_input('In','shadow_meta')])]
+    if not volume:
+        chain['targets']['vacancy_depth'] = dict(width=256, height=256)
     return chain
 
 
@@ -94,7 +122,8 @@ def main():
     replacements = {CHAIN: (json.dumps(chain,indent=2)+'\n').encode()}
     kind = 'Static' if volume else 'Dynamic'
     meta = json.loads((ROOT/'pack.mcmeta').read_text(encoding='utf-8'))
-    meta['pack']['description'] = f'Chroma Shadows {kind} · 128 lights / 128 источников · 26.3'
+    title = f'Chroma Shadows {kind}' + ('' if volume else ' WorldEntities2') + (' Debug' if args.debug else '')
+    meta['pack']['description'] = f'{title} · 128 lights / 128 источников · 26.3'
     replacements['pack.mcmeta'] = (json.dumps(meta, ensure_ascii=False, indent=2)+'\n').encode()
     config = (ROOT/CONFIG).read_text()
     if args.debug:
@@ -109,7 +138,8 @@ def main():
             replacements[f'assets/chroma/textures/effect/shadows/{name}.png'] = (args.static_volume/(name+'.png')).read_bytes()
         replacements['docs/shadow-world.json'] = (args.static_volume/'metadata.json').read_bytes()
     replacements[CONFIG] = config.encode()
-    out = args.output or ROOT/'dist'/f'Chroma-Shadows-{kind}-26.3.zip'
+    suffix = '-Debug' if args.debug else ''
+    out = args.output or ROOT/'dist'/f'Chroma-Shadows-{kind}-26.3{suffix}.zip'
     out.parent.mkdir(parents=True,exist_ok=True)
     with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
         for path in pack_files():

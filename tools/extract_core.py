@@ -1,7 +1,8 @@
 """Rebuild Chroma core hooks from exact Minecraft 26.3 vanilla shaders.
 
 Generated files retain GLSL 330 and vanilla branches. This writes item/entity
-hooks and editor/screen-overlay guards; no terrain/post shaders change.
+hooks, editor/screen-overlay guards and the final OIT depth mask; no terrain
+or post shaders change.
 """
 from argparse import ArgumentParser
 from pathlib import Path
@@ -19,15 +20,22 @@ layout(location = 14) flat {direction} int chromaSlot;
 """
 
 VERTEX_HELPER = """
-// R/G identify Chroma. B carries shape, local corner, and header/payload kind.
+// Validate the complete marker code. Ordinary blue textures can share R/G,
+// especially at an atlas corner whose padding repeats one texel five times.
+bool chromaMatchSample(vec4 value, int identity) {
+    int code = int(value.b * 255.0 + 0.5);
+    return value.a >= 254.5 / 255.0 && (code & 192) == 0 &&
+           (code & 7) <= 4 && (code & 39) == identity &&
+           all(lessThan(abs(value.rg - vec2(76.0, 195.0) / 255.0), vec2(3.0 / 255.0)));
+}
 bool chromaMatchKey(vec2 uv, vec2 tx) {
-    vec2 tolerance = vec2(3.0 / 255.0);
-    vec2 key = vec2(76.0, 195.0) / 255.0;
-    return all(lessThan(abs(textureLod(Sampler0, uv, 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv + vec2(tx.x, 0.0), 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv - vec2(tx.x, 0.0), 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv + vec2(0.0, tx.y), 0.0).rg - key), tolerance)) &&
-           all(lessThan(abs(textureLod(Sampler0, uv - vec2(0.0, tx.y), 0.0).rg - key), tolerance));
+    vec4 value = textureLod(Sampler0, uv, 0.0);
+    int identity = int(value.b * 255.0 + 0.5) & 39; // Shape and header; corner varies.
+    return chromaMatchSample(value, identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv + vec2(tx.x, 0.0), 0.0), identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv - vec2(tx.x, 0.0), 0.0), identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv + vec2(0.0, tx.y), 0.0), identity) &&
+           chromaMatchSample(textureLod(Sampler0, uv - vec2(0.0, tx.y), 0.0), identity);
 }
 """
 
@@ -41,7 +49,8 @@ VERTEX_BRANCH = """
     chromaFacing = vec3(0.0, 0.0, -1.0);
     chromaSlot = 0;
     vec2 chromaTexel = 1.0 / vec2(textureSize(Sampler0, 0));
-    if (chromaMatchKey(UV0, chromaTexel)) {
+    // Markers carry world-camera data; orthographic inventory/GUI stays native.
+    if (ProjMat[2][3] != 0.0 && chromaMatchKey(UV0, chromaTexel)) {
         int variant = int(textureLod(Sampler0, UV0, 0.0).b * 255.0 + 0.5);
         int corner = (variant >> 3) & 3;
         bool header = (variant & 32) != 0;
@@ -179,7 +188,19 @@ SCREEN_OVERLAY_FRAGMENT_BRANCH = """
 """
 
 
-def transform(vanilla: str, stage: str) -> str:
+ENTITY_CASTER_BRANCH = """
+    #if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS != 1 && CHROMA_TRANSPARENT_DEPTH_MASK && !defined(OIT)
+    // Improved Transparency ON routes blended entities through OIT. Only the
+    // remaining opaque/cutout draw may use unused framebuffer alpha metadata.
+    // Preserve native cutout, RGB, depth and all marker packets above. Mode 0/2
+    // excludes this entity-shader group from persistent caster acquisition;
+    // nonzero metadata still lets these surfaces receive Chroma lighting.
+    if (fragColor.a >= 254.5 / 255.0) fragColor.a = 1.0 / 255.0;
+    #endif
+"""
+
+
+def transform(vanilla: str, stage: str, *, entity_caster: bool = False) -> str:
     """Add Chroma hooks without editing the vanilla color/geometry branches."""
     if stage == 'vsh':
         anchor = '#include <minecraft:projection.glsl>\n'
@@ -193,6 +214,12 @@ def transform(vanilla: str, stage: str) -> str:
     anchor = '#ifdef GLINT\n#include <minecraft:globals.glsl>\n#endif'
     assert vanilla.count(anchor) == 1
     shader = vanilla.replace(anchor, '#include <minecraft:globals.glsl>\n#include <minecraft:projection.glsl>\n#include <chroma:ferry_guard.glsl>')
+    if entity_caster:
+        shader = shader.replace('#include <chroma:ferry_guard.glsl>\n',
+            '#include <chroma:ferry_guard.glsl>\n#include <chroma:shadow_config.glsl>\n')
+        anchor = '    fragColor = calculateFinalColor(color);\n'
+        assert shader.count(anchor) == 1
+        shader = shader.replace(anchor, anchor + ENTITY_CASTER_BRANCH)
     before, after = shader.split('void main() {', 1)
     return before + VARYINGS.format(direction='in') + FRAGMENT_HELPER + '\nvoid main() {\n' + FRAGMENT_BRANCH + after
 
@@ -246,6 +273,35 @@ def write_screen_overlay(jar: ZipFile, output: Path) -> None:
     destination.write_text(transform_screen_overlay(vanilla), encoding='utf-8', newline='\n')
 
 
+TRANSPARENT_DEPTH_BRANCH = """#if !CHROMA_STATIC_WORLD && CHROMA_TRANSPARENT_DEPTH_MASK
+    // OIT has already resolved native visibility and premultiplied color.
+    // Its nearest translucent depth is not opaque world geometry. Preserve
+    // color/coverage and mark this pixel unknown to Dynamic's depth consumer.
+    // Fully transparent holes were discarded above, retaining background depth.
+    gl_FragDepth = 1.0;
+    #else
+    gl_FragDepth = closestBoundDeviceDepth;
+    #endif"""
+
+
+def transform_oit_composite(vanilla: str) -> str:
+    """Change only final OIT depth; Static/OFF retains exact native behavior."""
+    anchor = '#include <minecraft:oit.glsl>\n'
+    assert vanilla.count(anchor) == 1
+    shader = vanilla.replace(anchor, anchor + '#include <chroma:shadow_config.glsl>\n')
+    anchor = 'gl_FragDepth = closestBoundDeviceDepth;'
+    assert shader.count(anchor) == 1
+    return shader.replace(anchor, TRANSPARENT_DEPTH_BRANCH)
+
+
+def write_oit_composite(jar: ZipFile, output: Path) -> None:
+    rel = 'assets/minecraft/shaders/core/oit_composite.fsh'
+    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+    destination = output / rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(transform_oit_composite(vanilla), encoding='utf-8', newline='\n')
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument('--client-jar', type=Path, default=Path(os.environ['APPDATA']) / 'PrismLauncher/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar')
@@ -258,7 +314,9 @@ def main():
                 vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
                 destination = args.output / rel
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(transform(vanilla, stage), encoding='utf-8', newline='\n')
+                destination.write_text(transform(vanilla, stage, entity_caster=stem == 'entity' and
+                    (Path(__file__).resolve().parents[1] / 'assets/chroma/shaders/include/shadow_config.glsl').exists()),
+                    encoding='utf-8', newline='\n')
                 print(rel)
         write_position_color(jar, args.output)
         print('assets/minecraft/shaders/core/position_color.vsh')
@@ -270,6 +328,8 @@ def main():
             print(rel)
         write_screen_overlay(jar, args.output)
         print('assets/minecraft/shaders/core/position_tex_color.fsh')
+        write_oit_composite(jar, args.output)
+        print('assets/minecraft/shaders/core/oit_composite.fsh')
 
 
 if __name__ == '__main__':

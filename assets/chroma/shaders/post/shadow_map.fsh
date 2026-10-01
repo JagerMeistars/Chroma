@@ -52,6 +52,9 @@ void main() {
     vec3 direction = chromaShadowOctDecode(oct);
     vec3 light = transpose(chromaMdRot(MatDecSampler, 0))
                * chromaMdLampEyeOf(MatDecSampler, lamp);
+#if !CHROMA_STATIC_WORLD
+    light = chromaShadowMapOrigin(light);
+#endif
     float radius = uintBitsToFloat(chromaVoxDecode(texelFetch(CurrentShadowMetaSampler, ivec2(base + 6, 0), 0)));
     float distanceToBlocker = chromaTraceDistance(light, light + direction * radius);
     fragColor = chromaVoxEncode(floatBitsToUint(clamp(distanceToBlocker, 0.0, radius)));

@@ -1,12 +1,57 @@
 #ifndef CHROMA_SHADOW_FILTER
 #define CHROMA_SHADOW_FILTER
 #include <chroma:voxel_space.glsl>
+#if CHROMA_STATIC_WORLD
+#include <chroma:shadow_filter_static.glsl>
+#else
 uniform sampler2D ShadowSampler;
+uniform sampler2D SurfaceSampler;
 uniform sampler2D VoxelSampler;
+uniform sampler2D VoxelLod1Sampler;
 const int CHROMA_SHADOW_RES = 128;
 const ivec2 CHROMA_BLOCKER_OFFSETS[9] = ivec2[9](
     ivec2(0,0), ivec2(-1,0), ivec2(1,0), ivec2(0,-1), ivec2(0,1),
     ivec2(-1,-1), ivec2(1,-1), ivec2(-1,1), ivec2(1,1));
+
+const vec2 CHROMA_SEARCH_DISK[9] = vec2[9](
+    vec2(0.0000000000, 0.0000000000),
+    vec2(-0.2606992670, 0.2388218838),
+    vec2(0.0437128626, -0.4980855204),
+    vec2(0.3725911869, 0.4859792253),
+    vec2(-0.6962975829, -0.1231652390),
+    vec2(0.6670471304, -0.4243207817),
+    vec2(-0.2248239243, 0.8363337869),
+    vec2(-0.4311390418, -0.8301319935),
+    vec2(0.9393212956, 0.3430386329));
+#if CHROMA_SHADOW_SAMPLES == 8
+const vec2 CHROMA_SOURCE_DISK[8] = vec2[8](
+    vec2(0.2500000000, 0.0000000000),
+    vec2(-0.3192900903, 0.2924958773),
+    vec2(0.0488724662, -0.5568765411),
+    vec2(0.4024444781, 0.5249175574),
+    vec2(-0.7385351138, -0.1306364636),
+    vec2(0.6996049325, -0.4450313903),
+    vec2(-0.2340041596, 0.8704838042),
+    vec2(-0.4462713061, -0.8592682476));
+#else
+const vec2 CHROMA_SOURCE_DISK[16] = vec2[16](
+    vec2(0.1767766953, 0.0000000000),
+    vec2(-0.2257721880, 0.2068258183),
+    vec2(0.0345580522, -0.3937711785),
+    vec2(0.2845712195, 0.3711727644),
+    vec2(-0.5222231871, -0.0923739293),
+    vec2(0.4946953920, -0.3146847139),
+    vec2(-0.1654659281, 0.6155250008),
+    vec2(-0.3155614668, -0.6075944047),
+    vec2(0.6846421610, 0.2500302208),
+    vec2(-0.7122560869, 0.2940089567),
+    vec2(0.3433545007, -0.7337286193),
+    vec2(0.2537302385, 0.8089319910),
+    vec2(-0.7647458905, -0.4431858785),
+    vec2(0.8971339843, -0.1972323865),
+    vec2(-0.5475069078, 0.7787722298),
+    vec2(-0.1264867689, -0.9760896974));
+#endif
 
 vec3 chromaShadowReceiver(vec3 receiver, vec3 normal) {
 #if CHROMA_SHADOW_PIXELATE
@@ -56,215 +101,284 @@ vec3 chromaShadowDirection(ivec2 pixel) {
         direction.xy = (1.0 - abs(direction.yx)) * mix(vec2(-1), vec2(1), greaterThanEqual(direction.xy, vec2(0)));
     return normalize(direction);
 }
-float chromaReceiverDepth(vec3 direction, vec3 normal, float plane) {
-    float denominator = dot(direction, normal);
-    if (abs(denominator) < 0.0001 || denominator * plane <= 0.0) return 1e6;
-    return plane / denominator;
-}
-bool chromaShadowReceiverHit(float surfaceOffset, float receiverBias) {
-    // A conservative voxel face may sit above the true slab/sloped surface.
-    // Recognize only the hull already crossed by the normal bias, not an
-    // arbitrary full voxel; otherwise a clear receiver shadows itself.
-    return surfaceOffset >= -0.02 && surfaceOffset <= receiverBias + 0.02;
-}
-float chromaShadowRayDepth(int lamp, vec3 direction, vec3 light, float lightRadius) {
-    vec2 p = chromaShadowUV(direction) * float(CHROMA_SHADOW_RES) - 0.5;
-    ivec2 base = ivec2(floor(p));
-    vec3 localLight = light - CameraOffset;
-    float nearest = lightRadius;
-    ivec3 seen = ivec3(2147483647);
-    // Each stored DDA hit identifies an occupied quarter-cell. Reproject its
-    // entry faces onto the requested ray and check the actual voxel. Bilinear
-    // comparison of four unrelated rays made a straight silhouette sawtoothed.
-    // This uses the existing map as four geometric candidates, not four binary
-    // coverage samples; no longer ray march or higher-resolution map is needed.
-    for (int i = 0; i < 4; ++i) {
-        ivec2 pixel = base + ivec2(i & 1, i >> 1);
-        float depth = chromaShadowDepth(lamp, pixel);
-        if (depth <= 0.0001) return depth;
-        if (depth >= lightRadius - 0.001) continue;
-        vec3 sampledDirection = chromaShadowDirection(pixel);
-        vec3 hit = localLight + sampledDirection * (depth + 0.0001);
-        ivec3 hitCell = ivec3(floor(hit * float(CHROMA_VOX_CELLS)));
-        // A neighbouring ray can enter the cell from a different side.
-        // Testing only axes within 2 mm of the stored hit lost thin posts
-        // abruptly when the hit moved away from their corner.
-        ivec3 face = hitCell + ivec3(lessThan(direction, vec3(0.0)));
-        vec3 plane = vec3(face) * CHROMA_VOX_CELL;
-        for (int axis = 0; axis < 3; ++axis) {
-            if (abs(direction[axis]) < 0.000001
-                    || seen[axis] == face[axis]) continue;
-            seen[axis] = face[axis];
-            float t = (plane[axis] - localLight[axis]) / direction[axis];
-            if (t <= 0.0 || t >= nearest) continue;
-            ivec3 cell = chromaVoxOf(light + direction * (t + 0.0001));
-            if (chromaVoxConfidence(VoxelSampler, cell) >= 2u) nearest = t;
-        }
+// Broad kernels use radial-depth PCSS. Subtexel kernels additionally resolve
+// one physical ray against cached finite surfaces so map texels cannot fill
+// alpha holes. Both paths remain limited by observed/cached geometry.
+const float CHROMA_PCSS_MAX_SLOPE = 1.0;
+const float CHROMA_PCSS_MAX_RADIAL_BIAS = 0.05;
+
+void chromaPcssBasis(vec3 axis, out vec3 tangent, out vec3 bitangent) {
+    // Frisvad's frame is continuous away from its south-pole singularity;
+    // unlike a .9 axis switch, ordinary source motion cannot rotate the disk.
+    if (axis.z < -0.9999999) tangent = normalize(vec3(0.0, -axis.z, axis.y));
+    else {
+        float a = 1.0 / (1.0 + axis.z);
+        tangent = normalize(vec3(1.0 - axis.x * axis.x * a,
+                                 -axis.x * axis.y * a, -axis.x));
     }
-    return nearest;
+    bitangent = cross(axis, tangent);
 }
-bool chromaShadowSeedBlocked(vec3 direction, vec3 light, vec3 normal, float surfacePlane,
-                            float distance, float receiverBias, int seedCount, ivec3 seedCells[4]) {
-    vec3 localLight = light - CameraOffset;
-    for (int i = 0; i < seedCount; ++i) {
+float chromaPcssTexelSlope(vec3 axis) {
+    // Angular Jacobian of octahedral decoding at this continuous direction.
+    // A texel is not 1/128 radians; its footprint varies over the octahedron.
+    float scale = abs(axis.x) + abs(axis.y) + abs(axis.z);
+    vec2 signs = mix(vec2(-1.0), vec2(1.0), greaterThanEqual(axis.xy, vec2(0.0)));
+    vec3 dx = vec3(1.0, 0.0, -signs.x);
+    vec3 dy = vec3(0.0, 1.0, -signs.y);
+    if (axis.z < 0.0) {
+        dx = vec3(0.0, -signs.x * signs.y, -signs.x);
+        dy = vec3(-signs.x * signs.y, 0.0, -signs.y);
+    }
+    return min(length(dx - axis * dot(axis, dx)),
+               length(dy - axis * dot(axis, dy))) * scale * (2.0 / float(CHROMA_SHADOW_RES));
+}
+
+bool chromaAreaCellBlocked(ivec3 cell, vec3 origin, vec3 direction, float distance) {
+    if (!chromaVoxContains(cell, chromaVoxOrigin())) return false;
+    // A zero LOD parent proves that all four surface records are empty. Most
+    // candidate crossings above a lit floor take this one-fetch path.
+    if (!chromaOccupiedLod(VoxelLod1Sampler, cell, 1)) return false;
+    return chromaVoxDataRayAny(chromaVoxSurfaceData(VoxelSampler, cell),
+                              cell, origin, direction, distance);
+}
+bool chromaAreaPlaneBlocked(int axis, int face, vec3 origin, vec3 direction,
+                           float distance, ivec3 receiverCell) {
+    if (abs(direction[axis]) < 0.000001) return false;
+    float t = (float(face) * CHROMA_VOX_CELL - (origin[axis] - CameraOffset[axis])) / direction[axis];
+    if (t <= 0.0 || t >= distance - 0.0001) return false;
+    // The map supplies candidate cells. Dynamic intersects their observed
+    // finite surface patches; Static retains its exported solid quarter cells.
+    // A zero-thickness plane on a quarter-cell boundary belongs to the cell
+    // inward from its acquisition normal, which can be either side of this ray.
+    ivec3 before = chromaVoxOf(origin + direction * (t - 0.0001));
+    ivec3 after = chromaVoxOf(origin + direction * (t + 0.0001));
+    if (chromaAreaCellBlocked(before, origin, direction, distance - 0.0001)) return true;
+    return any(notEqual(before, after)) && chromaAreaCellBlocked(after,
+        origin, direction, distance - 0.0001);
+}
+// The source atlas owns the expensive depth-to-finite-surface lookup. Bit30
+// selects the owner side of the quarter boundary; nonzero mask implies valid.
+bool chromaAreaCachedPlane(int lamp, ivec2 pixel, vec3 light, float depth,
+                           out uint surface, out vec4 plane, out ivec3 cell) {
+    ivec2 tile = ivec2(lamp % 16, lamp / 16) * CHROMA_SHADOW_RES;
+    uint payload = chromaVoxDecode(texelFetch(SurfaceSampler, tile + chromaShadowSeam(pixel), 0));
+    if (chromaSurfelMask(payload) == 0u && (payload & 0x80000000u) == 0u) return false;
+    vec3 mapDirection = chromaShadowDirection(pixel);
+    light = chromaShadowMapOrigin(light);
+    cell = chromaVoxOf(light + mapDirection * (depth + ((payload & 0x40000000u) != 0u ? 0.0001 : -0.0001)));
+    surface = payload | 0x40000000u;
+    if ((surface & 0x80000000u) != 0u) { plane = vec4(0.0); return true; }
+    vec3 normal = chromaSurfelNormal(surface);
+    float offset = (float((surface >> 8u) & 63u) / 63.0 - 0.5)
+                 * CHROMA_VOX_CELL * dot(abs(normal), vec3(1.0));
+    plane = vec4(normal, dot(normal, chromaVoxCentre(cell)) + offset);
+    return true;
+}
+bool chromaAreaSamePlane(vec4 a, ivec3 aCell, vec4 b, ivec3 bCell) {
+    if (dot(a.xyz, a.xyz) < 0.5 || dot(b.xyz, b.xyz) < 0.5)
+        return dot(a.xyz, a.xyz) < 0.5 && dot(b.xyz, b.xyz) < 0.5 && all(equal(aCell, bCell));
+    float facing = dot(a.xyz, b.xyz);
+    return abs(facing) > 0.99999 && abs(a.w - (facing < 0.0 ? -b.w : b.w)) < 0.00001;
+}
+bool chromaAreaProjectedBlocked(uint surface, vec4 plane, ivec3 guideCell,
+                                vec3 origin, vec3 direction, float distance) {
+    if (dot(plane.xyz, plane.xyz) < 0.5) {
+        ivec3 localCell = guideCell - CameraBlockPos * CHROMA_VOX_CELLS;
         for (int side = 0; side < 2; ++side) {
-            ivec3 face = seedCells[i] + (side == 0
-                ? ivec3(lessThan(direction, vec3(0.0)))
+            ivec3 face = localCell + (side == 0 ? ivec3(lessThan(direction, vec3(0.0)))
                 : ivec3(greaterThanEqual(direction, vec3(0.0))));
-            for (int axis = 0; axis < 3; ++axis) {
-                if (abs(direction[axis]) < 0.000001) continue;
-                bool seen = false;
-                for (int previous = 0; previous < i; ++previous)
-                    seen = seen || face[axis] == seedCells[previous][axis]
-                                || face[axis] == seedCells[previous][axis] + 1;
-                if (seen) continue;
-                float t = (float(face[axis]) * CHROMA_VOX_CELL - localLight[axis]) / direction[axis];
-                // Prove an actual source-side occluder before reading the voxel.
-                // Neither a receiver-plane hit nor a point beyond it can cause
-                // this early return. Both cell boundaries help neighbouring rays
-                // reach a thin post behind its protruding front quarter-cell.
-                if (t <= 0.0 || t >= distance - 0.02
-                        || dot(direction, normal) * t - surfacePlane <= receiverBias + 0.02) continue;
-                if (chromaVoxConfidence(VoxelSampler, chromaVoxOf(light + direction * (t + 0.0001))) >= 2u)
-                    return true;
-            }
+            for (int axis = 0; axis < 3; ++axis)
+                if (chromaAreaPlaneBlocked(axis, face[axis], origin, direction, distance, ivec3(0))) return true;
         }
+        return false;
     }
-    return false;
+    float denominator = dot(plane.xyz, direction);
+    if (abs(denominator) < 0.0000001) return false;
+    float t = (plane.w - dot(plane.xyz, origin)) / denominator;
+    if (t <= 0.0 || t >= distance - 0.0001) return false;
+    vec3 hit = origin + direction * t;
+    ivec3 before = chromaVoxOf(origin + direction * (t - 0.0001));
+    ivec3 after = chromaVoxOf(origin + direction * (t + 0.0001));
+    if ((all(equal(before, guideCell)) || all(equal(after, guideCell)))
+            && chromaSurfelCoveredAxis(surface, guideCell, hit, chromaSurfelAxis(plane.xyz))) return true;
+    // An infinite guide plane is only a candidate. Validate its actual owner
+    // cell, so a distant wall remains continuous without filling alpha holes.
+    if (chromaAreaCellBlocked(before, origin, direction, distance - 0.0001)) return true;
+    return any(notEqual(before, after)) && chromaAreaCellBlocked(after, origin, direction, distance - 0.0001);
 }
-vec2 chromaShadowPCF(int lamp, vec3 direction, vec3 light, vec3 normal, float surfacePlane, float distance,
-                     float footprint, float lightRadius, float receiverBias, float foregroundLimit,
-                     int seedCount, ivec3 seedCells[4]) {
-    if (chromaShadowSeedBlocked(direction, light, normal, surfacePlane, distance,
-                                receiverBias, seedCount, seedCells)) return vec2(0.0, 1.0);
-    float depth = chromaShadowRayDepth(lamp, direction, light, lightRadius);
-    float reference = chromaReceiverDepth(direction, normal, surfacePlane + receiverBias);
-    // An empty ray that never reaches this plane inside the source range is
-    // not a clear receiver sample. Counting it lit leaks through a nearby slab.
-    if (depth >= lightRadius - 0.001)
-        return reference <= lightRadius ? vec2(1.0) : vec2(0.0);
-    if (chromaShadowReceiverHit(dot(direction, normal) * depth - surfacePlane, receiverBias)) {
-        // The sampled receiver surface is clear, but an earlier intersection
-        // with its infinite plane says nothing about blockers farther along
-        // the central ray. Fade those foreground samples out continuously.
-        // Hard footprint rejection caused full lit/dark jumps on straight edges.
-        float weight = smoothstep(foregroundLimit, foregroundLimit + footprint, depth);
-        return vec2(weight);
-    }
-    // Preserve plane-relative comparison for nearby parallel blockers. A
-    // grazing intersection before the receiver cannot prove the rest is clear.
-    reference = reference > 1e5 ? distance : max(distance, reference);
-    return vec2(step(reference - 0.02, depth), 1.0);
-}
-float chromaShadowFallbackDepth(int lamp, ivec2 pixel, vec3 normal, float plane, float lightRadius) {
-    float depth = chromaShadowDepth(lamp, pixel);
-    if (depth >= lightRadius - 0.001) return depth;
-    float reference = chromaReceiverDepth(chromaShadowDirection(pixel), normal, plane);
-    // A texel consistent with the extrapolated receiver plane is its own
-    // surface, not evidence of a separate blocker along the central ray.
-    return reference < 1e5 && depth >= reference - 0.02 ? -1.0 : depth;
-}
-float chromaShadowFallback(int lamp, vec3 axis, vec3 normal, float plane, float distance, float lightRadius) {
-    // Near the plane horizon, even adjacent texels may project far from the
-    // receiver. Use the least-occluding local radial depth in this finite-map
-    // case, instead of declaring the absent plane samples fully illuminated.
-    ivec2 p = ivec2(floor(chromaShadowUV(axis) * float(CHROMA_SHADOW_RES) - 0.5));
-    float depth = max(max(chromaShadowFallbackDepth(lamp, p, normal, plane, lightRadius),
-                          chromaShadowFallbackDepth(lamp, p + ivec2(1,0), normal, plane, lightRadius)),
-                      max(chromaShadowFallbackDepth(lamp, p + ivec2(0,1), normal, plane, lightRadius),
-                          chromaShadowFallbackDepth(lamp, p + ivec2(1,1), normal, plane, lightRadius)));
-    return depth < 0.0 || depth >= lightRadius - 0.001 ? 1.0 : step(distance - 0.02, depth);
-}
-float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float lightRadius) {
-#if CHROMA_STATIC_WORLD
-    float bias = 0.035;
-#else
-    float bias = 0.18;
-#endif
-    // Never move the receiver plane onto/across its source. At plane == 0,
-    // the old blocker search rejected every tap and returned fully lit.
-    float height = max(dot(light - receiver, normal), 0.0);
-    float surfacePlane = dot(receiver - light, normal);
-    float receiverBias = min(bias, height * 0.5);
-    receiver += normal * receiverBias;
-    vec3 delta = receiver - light;
+float chromaPcssHardShadow(int lamp, vec3 receiver, vec3 normal, vec3 light,
+                           float normalBias, float lightRadius, float sourceRadius) {
+    vec3 target = receiver + normal * normalBias;
+    vec3 delta = target - light;
     float distance = length(delta);
-    if (distance < 0.05) return 1.0;
+    if (distance <= 0.00001) return 1.0;
     vec3 axis = delta / distance;
-    ivec2 centerPixel = ivec2(chromaShadowUV(axis) * float(CHROMA_SHADOW_RES));
-    float centerDepth = chromaShadowDepth(lamp, centerPixel);
-    // The DDA's occupied start cell returns 0.000025 blocks. Such an origin
-    // hit is occlusion, not an empty map or a missing blocker-search sample.
-    if (centerDepth <= 0.0001) return 0.0;
-    vec3 tangent = normalize(cross(axis, abs(axis.y) < 0.9 ? vec3(0,1,0) : vec3(1,0,0)));
-    vec3 bitangent = cross(axis, tangent);
-    float plane = dot(delta, normal);
-    float blockerSum = 0.0, blockers = 0.0, farthestBlocker = 0.0;
+    vec3 tangent, bitangent;
+    chromaPcssBasis(axis, tangent, bitangent);
+    float searchAngle = min(sourceRadius / max(0.5, distance * 0.2), CHROMA_PCSS_MAX_SLOPE);
     int seedCount = 0;
     ivec3 seedCells[4];
-    float searchAngle = CHROMA_SOURCE_SIZE / max(0.5, distance * 0.2);
-    float texelFootprint = distance * (4.0 / float(CHROMA_SHADOW_RES));
+    vec4 seedPlanes[4];
+    uint seedSurfaces[4];
+    // At most seventeen depth seeds and four distinct finite guide planes.
     for (int i = 0; i < 9; ++i) {
-        float angle = float(i) * 2.39996323;
-        float radius = i == 0 ? 0.0 : sqrt(float(i) / 8.0) * searchAngle;
-        vec3 ray = normalize(axis + radius * (cos(angle) * tangent + sin(angle) * bitangent));
-        vec2 p = chromaShadowUV(ray) * float(CHROMA_SHADOW_RES) - 0.5;
-        ivec2 middle = ivec2(floor(p + 0.5));
-        vec2 normalization = 2.5 - abs(p - vec2(middle));
-        // The immediate 3x3 neighbourhood closes the gap between a thin
-        // caster and the eight wider probes. The normalized tent reaches zero
-        // at its outer edge, so changing the nearest texel keeps weights continuous.
-        // Seventeen map reads; the sixteen geometric PCF rays are unchanged.
+        vec2 offset = CHROMA_SEARCH_DISK[i] * searchAngle;
+        vec3 ray = normalize(axis + tangent * offset.x + bitangent * offset.y);
+        ivec2 middle = ivec2(floor(chromaShadowUV(ray) * float(CHROMA_SHADOW_RES)));
         for (int j = 0; j < (i == 0 ? 9 : 1); ++j) {
-            ivec2 pixel = i == 0 ? middle + CHROMA_BLOCKER_OFFSETS[j] : ivec2(p + 0.5);
-            vec2 weights = max(vec2(1.5) - abs(vec2(pixel) - p), vec2(0.0));
-            float weight = i == 0 ? weights.x * weights.y / (normalization.x * normalization.y) : 1.0;
-            if (weight <= 0.00000001) continue;
+            ivec2 pixel = middle + (i == 0 ? CHROMA_BLOCKER_OFFSETS[j] : ivec2(0));
             float depth = chromaShadowDepth(lamp, pixel);
-            float surfaceOffset = dot(chromaShadowDirection(pixel), normal) * depth - surfacePlane;
-            // Only geometry on the source side of the receiving plane can
-            // block it. Sparse floor voxels can expose side faces below that
-            // plane; counting those as blockers made the penumbra jump.
-            if (surfaceOffset > receiverBias + 0.02 && depth > 0.0001 && depth < lightRadius - 0.001 && depth < distance - 0.02) {
-                blockerSum += depth * weight; blockers += weight;
-                farthestBlocker = max(farthestBlocker, depth);
-                if (i == 0) {
-                    ivec3 cell = ivec3(floor((light - CameraOffset
-                        + chromaShadowDirection(pixel) * (depth + 0.0001)) * float(CHROMA_VOX_CELLS)));
-                    bool duplicate = false;
-                    for (int k = 0; k < seedCount; ++k)
-                        duplicate = duplicate || all(equal(cell, seedCells[k]));
-                    // Centre, axis neighbours, then corners: at most four
-                    // distinct occupied cells are shared by all filter rays.
-                    if (!duplicate && seedCount < 4) seedCells[seedCount++] = cell;
-                }
+            if (!(depth > 0.0001) || depth >= lightRadius - 0.001
+                    || depth > distance + sourceRadius) continue;
+            vec3 hit = light + chromaShadowDirection(pixel) * (depth + 0.0001);
+            if (dot(hit - receiver, normal) <= 0.0) continue;
+            vec4 plane; ivec3 cell; uint surface;
+            if (!chromaAreaCachedPlane(lamp, pixel, light, depth, surface, plane, cell)) continue;
+            bool duplicate = false;
+            for (int previous = 0; previous < seedCount; ++previous)
+                duplicate = duplicate || chromaAreaSamePlane(plane, cell, seedPlanes[previous], seedCells[previous]);
+            if (!duplicate && seedCount < 4) {
+                seedSurfaces[seedCount] = surface; seedPlanes[seedCount] = plane; seedCells[seedCount++] = cell;
             }
         }
     }
-    if (blockers == 0.0) {
-        vec2 center = chromaShadowPCF(lamp, axis, light, normal, surfacePlane, distance, texelFootprint, lightRadius, receiverBias, distance, seedCount, seedCells);
-        return center.y > 0.00001 ? center.x / center.y : chromaShadowFallback(lamp, axis, normal, plane, distance, lightRadius);
-    }
-    float blocker = blockerSum / blockers;
-    float penumbra = CHROMA_SOURCE_SIZE * max(distance - blocker, 0.0)
-                   / max(distance * blocker, 0.01);
-    // Geometric samples across a source-sized disk, all in world directions.
-    float filterAngle = max(penumbra, 0.7 / float(CHROMA_SHADOW_RES));
-    float footprint = distance * filterAngle + texelFootprint;
-    // A receiver-plane hit beyond the local blockers is useful lit evidence,
-    // even if its radial distance is shorter than the central receiver's.
-    // Requiring the full distance overdarkened and displaced straight edges.
-    // Keep the source-side half excluded: a wide near-source filter can see
-    // foreground plane intersections that hide an otherwise closed wall.
-    float foregroundLimit = max(distance * 0.5,
-        min(distance, farthestBlocker + texelFootprint));
-    vec2 visible = vec2(0.0);
-    for (int i = 0; i < 16; ++i) {
-        float angle = float(i) * 2.39996323;
-        float radius = sqrt((float(i) + 0.5) / 16.0) * filterAngle;
-        vec3 ray = normalize(axis + radius * (cos(angle) * tangent + sin(angle) * bitangent));
-        visible += chromaShadowPCF(lamp, ray, light, normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit, seedCount, seedCells);
-    }
-    return visible.y > 0.00001 ? visible.x / visible.y : chromaShadowFallback(lamp, axis, normal, plane, distance, lightRadius);
+    // One central segment, not the old sixteen source-disk geometry traces.
+    // Check the start cell too: an inset source can hit a patch before a face.
+    if (chromaAreaCellBlocked(chromaVoxOf(light), light, axis, distance - 0.0001)) return 0.0;
+    for (int seed = 0; seed < seedCount; ++seed)
+        if (chromaAreaProjectedBlocked(seedSurfaces[seed], seedPlanes[seed], seedCells[seed],
+                                      light, axis, distance)) return 0.0;
+    return 1.0;
 }
+
+float chromaPcssReceiverDepth(vec3 ray, vec3 normal, float plane) {
+    float denominator = dot(ray, normal);
+    // A ray in the other hemisphere never reaches this receiving plane.
+    if (abs(denominator) < 0.00001 || denominator * plane <= 0.0) return -1.0;
+    return plane / denominator;
+}
+float chromaPcssBias(vec3 ray, vec3 normal, float normalBias) {
+    // Convert the bounded surface-normal allowance to radial depth, then cap
+    // it again: grazing angles must not create an arbitrarily large light leak.
+    return min(normalBias / max(abs(dot(ray, normal)), 0.00001),
+               CHROMA_PCSS_MAX_RADIAL_BIAS);
+}
+bool chromaPcssHasBlocker(float depth, float radius) {
+    // Radius is the no-hit sentinel. Comparisons also reject NaN/Inf/negative
+    // payloads; zero remains a real embedded-source hit, not empty space.
+    return depth >= 0.0 && depth < radius - 0.001;
+}
+vec2 chromaPcssCompare(int lamp, vec3 direction, vec3 normal, float plane,
+                      float normalBias, float lightRadius) {
+    vec2 p = chromaShadowUV(direction) * float(CHROMA_SHADOW_RES) - 0.5;
+    ivec2 base = ivec2(floor(p));
+    vec2 fraction = fract(p);
+    vec2 result = vec2(0.0);
+    // Packed float depth cannot use hardware linear filtering. Interpolate
+    // four COMPARISONS, each at its own texel ray/receiver-plane intersection.
+    // Averaging depths first creates nonexistent surfaces across silhouettes.
+    for (int i = 0; i < 4; ++i) {
+        ivec2 offset = ivec2(i & 1, i >> 1);
+        vec2 weight2 = mix(1.0 - fraction, fraction, bvec2(offset));
+        float weight = weight2.x * weight2.y;
+        if (weight <= 0.0) continue;
+        ivec2 pixel = base + offset;
+        vec3 ray = chromaShadowDirection(pixel);
+        float receiverDepth = chromaPcssReceiverDepth(ray, normal, plane);
+        if (receiverDepth <= 0.0) continue;
+        float depth = chromaShadowDepth(lamp, pixel);
+        float bias = min(chromaPcssBias(ray, normal, normalBias), receiverDepth * 0.5);
+        bool blocked = chromaPcssHasBlocker(depth, lightRadius) && depth < receiverDepth - bias;
+        result += vec2(blocked ? 0.0 : weight, weight);
+    }
+    return result;
+}
+float chromaPcssVisibility(vec2 comparison) {
+    return comparison.y > 0.000001 ? clamp(comparison.x / comparison.y, 0.0, 1.0) : 1.0;
+}
+float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float lightRadius) {
+    if (!(lightRadius > 0.0) || isinf(lightRadius)) return 1.0;
+    light = chromaShadowMapOrigin(light);
+    vec3 delta = receiver - light;
+    float distance = length(delta);
+    float normalLength2 = dot(normal, normal);
+    if (!(distance > 0.00001) || isinf(distance)
+            || !(normalLength2 > 0.00000001) || isinf(normalLength2)) return 1.0;
+    normal *= inversesqrt(normalLength2);
+    float plane = dot(delta, normal);
+    float height = -plane;
+    // shade.fsh already skips back-facing receivers. Keep a neutral result
+    // for invalid/direct calls instead of dividing through a tangent plane.
+    if (!(height > 0.000001)) return 1.0;
+    float quantizationBias = max(abs(normal.x), max(abs(normal.y), abs(normal.z))) > 0.99999
+        ? 0.005 : 0.035;
+    float normalBias = min(quantizationBias, height * 0.5);
+    vec3 axis = delta / distance;
+    ivec2 centerPixel = ivec2(floor(chromaShadowUV(axis) * float(CHROMA_SHADOW_RES)));
+    float centerDepth = chromaShadowDepth(lamp, centerPixel);
+    // Preserve the previous conservative embedded-centre behavior. Off-centre
+    // emitter occlusion cannot be reconstructed from a single centre depth map.
+    if (centerDepth >= 0.0 && centerDepth <= 0.0001) return 0.0;
+    float sourceRadius = max(CHROMA_SOURCE_SIZE, 0.0);
+    if (sourceRadius <= 0.000001)
+        return chromaPcssHardShadow(lamp, receiver, normal, light, normalBias, lightRadius, sourceRadius);
+    vec3 tangent, bitangent;
+    chromaPcssBasis(axis, tangent, bitangent);
+    // Seventeen bounded reads: a continuous local 3x3 tent plus eight wider
+    // probes. This finite search can miss a thin blocker between its samples.
+    float searchAngle = min(sourceRadius / max(0.5, distance * 0.2), CHROMA_PCSS_MAX_SLOPE);
+    float blockerSum = 0.0, blockerWeight = 0.0;
+    for (int i = 0; i < 9; ++i) {
+        vec2 offset = CHROMA_SEARCH_DISK[i] * searchAngle;
+        vec3 direction = normalize(axis + tangent * offset.x + bitangent * offset.y);
+        vec2 p = chromaShadowUV(direction) * float(CHROMA_SHADOW_RES) - 0.5;
+        ivec2 middle = ivec2(floor(p + 0.5));
+        vec2 normalization = 2.5 - abs(p - vec2(middle));
+        for (int j = 0; j < (i == 0 ? 9 : 1); ++j) {
+            ivec2 pixel = middle + (i == 0 ? CHROMA_BLOCKER_OFFSETS[j] : ivec2(0));
+            vec2 weight2 = max(vec2(1.5) - abs(vec2(pixel) - p), vec2(0.0));
+            float weight = i == 0 ? weight2.x * weight2.y / (normalization.x * normalization.y) : 1.0;
+            if (weight <= 0.0) continue;
+            vec3 ray = chromaShadowDirection(pixel);
+            float receiverDepth = chromaPcssReceiverDepth(ray, normal, plane);
+            if (receiverDepth <= 0.0) continue;
+            float depth = chromaShadowDepth(lamp, pixel);
+            float bias = min(chromaPcssBias(ray, normal, normalBias), receiverDepth * 0.5);
+            if (!chromaPcssHasBlocker(depth, lightRadius) || depth >= receiverDepth - bias) continue;
+            // The disk formula uses depth along the central light/receiver
+            // axis, not the longer radial distance of an off-centre map ray.
+            float axialDepth = depth * dot(ray, axis);
+            if (axialDepth <= 0.0001 || axialDepth >= distance) continue;
+            blockerSum += axialDepth * weight;
+            blockerWeight += weight;
+        }
+    }
+    if (blockerWeight <= 0.000001)
+        return chromaPcssHardShadow(lamp, receiver, normal, light, normalBias, lightRadius, sourceRadius);
+    float blocker = blockerSum / blockerWeight;
+    // Similar triangles: R * (receiver - blocker) / (receiver * blocker).
+    // Contact uses the central finite-surface ray. No minimum blur is added.
+    // The slope cap bounds near-emitter kernels, not their GPU timing.
+    float filterAngle = min(sourceRadius * max(distance - blocker, 0.0)
+        / max(distance * blocker, 0.0001), CHROMA_PCSS_MAX_SLOPE);
+    float texelSlope = chromaPcssTexelSlope(axis);
+    float softWeight = smoothstep(0.5 * texelSlope, texelSlope, filterAngle);
+    float hardVisibility = 1.0;
+    if (softWeight < 1.0) {
+        hardVisibility = chromaPcssHardShadow(lamp, receiver, normal, light, normalBias, lightRadius, sourceRadius);
+        if (softWeight <= 0.0) return hardVisibility;
+    }
+    vec2 visible = vec2(0.0);
+    for (int i = 0; i < CHROMA_SHADOW_SAMPLES; ++i) {
+        vec2 disk = CHROMA_SOURCE_DISK[i];
+        vec3 sourceOffset = (tangent * disk.x + bitangent * disk.y) * sourceRadius;
+        // Only the physical emitter disk's front hemisphere contributes to an
+        // opaque receiver. Normalize by supported comparison weights below.
+        if (dot(light + sourceOffset - receiver, normal) <= 0.0) continue;
+        vec3 direction = normalize(axis + (tangent * disk.x + bitangent * disk.y) * filterAngle);
+        visible += chromaPcssCompare(lamp, direction, normal, plane, normalBias, lightRadius);
+    }
+    return mix(hardVisibility, chromaPcssVisibility(visible), softWeight);
+}
+#endif
 #endif

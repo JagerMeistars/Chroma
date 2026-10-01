@@ -6,21 +6,6 @@ uniform sampler2D VoxelSampler;
 uniform sampler2D VoxelLod1Sampler;
 uniform sampler2D VoxelLod2Sampler;
 
-bool chromaOccupiedLod(sampler2D volume, ivec3 absoluteCell, int level) {
-#if CHROMA_STATIC_WORLD
-    ivec3 cell = (absoluteCell - CHROMA_VOX_ORIGIN) >> level;
-    int columns = (chromaVoxDims().x >> level) / 16;
-#else
-    int n = CHROMA_VOX_N >> level;
-    ivec3 cell = (absoluteCell >> level) & (n - 1);
-    int columns = n / 16;
-#endif
-    ivec2 pixel = ivec2(cell.x / 16 + columns * cell.z, cell.y);
-    vec4 packed = texelFetch(volume, pixel, 0);
-    uint channel = uint(packed[(cell.x & 15) >> 2] * 255.0 + 0.5);
-    return ((channel >> uint((cell.x & 3) * 2)) & 3u) >= 2u;
-}
-
 float chromaVoxelExit(vec3 start, vec3 direction, float t, float size) {
     vec3 point = start + direction * t;
     vec3 boundary = (floor(point / size) + step(vec3(0.0), direction)) * size;
@@ -55,9 +40,22 @@ float chromaTraceDistance(vec3 from, vec3 to) {
             t = chromaVoxelExit(start, direction, t, 4.0);
         else if (!chromaOccupiedLod(VoxelLod1Sampler, cell, 1))
             t = chromaVoxelExit(start, direction, t, 2.0);
+#if CHROMA_STATIC_WORLD
         else if (!chromaOccupiedLod(VoxelSampler, cell, 0))
             t = chromaVoxelExit(start, direction, t, 1.0);
         else return t * CHROMA_VOX_CELL;
+#else
+        else {
+            float nextCell = chromaVoxelExit(start, direction, t, 1.0);
+            float cellEnd = min(nextCell, end);
+            float hit;
+            // Dynamic stores finite observed surface patches, not solid cell
+            // interiors. Static and surface overflow retain full-cell geometry.
+            if (chromaVoxRayHit(VoxelSampler, cell, from, direction,
+                                cellEnd * CHROMA_VOX_CELL, hit)) return hit;
+            t = nextCell;
+        }
+#endif
     }
     return min(t, lengthRay) * CHROMA_VOX_CELL;
 }

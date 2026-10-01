@@ -23,7 +23,8 @@ def main():
                 rel=f'assets/minecraft/shaders/core/{name}.{stage}'
                 vanilla=jar.read(rel).decode('utf-8').replace('\r\n','\n')
                 target=args.output/rel;target.parent.mkdir(parents=True,exist_ok=True)
-                target.write_text(extract_core.transform(vanilla,stage),encoding='utf-8',newline='\n')
+                target.write_text(extract_core.transform(vanilla,stage,entity_caster=name=='entity' and
+                    (ROOT/'assets/chroma/shaders/include/shadow_config.glsl').exists()),encoding='utf-8',newline='\n')
         extract_core.write_position_color(jar,args.output)
         extract_core.write_screen_overlay(jar,args.output)
     for name,source in TRANSPORT_INCLUDES.items():

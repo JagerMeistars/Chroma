@@ -1,5 +1,5 @@
 $ErrorActionPreference='Stop'
-$taskPrismRoot='C:/Users/konst/AppData/Roaming/PrismLauncher'
+$taskPrismRoot=Join-Path $env:APPDATA 'PrismLauncher'
 $taskJavaRoot="$taskPrismRoot/java/java-runtime-epsilon/bin"
 $taskClientJar="$taskPrismRoot/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar"
 $taskLibraryJars=Get-ChildItem -LiteralPath "$taskPrismRoot/libraries" -Filter '*.jar' -Recurse | Where-Object {$_.FullName -notmatch '\\com\\mojang\\minecraft\\'} | ForEach-Object {$_.FullName.Replace('\','/')}

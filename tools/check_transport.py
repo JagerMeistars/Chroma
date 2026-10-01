@@ -30,7 +30,8 @@ def main():
                 rel = f'assets/minecraft/shaders/core/{stem}.{stage}'
                 vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
                 shader = (args.root / rel).read_text(encoding='utf-8')
-                assert shader == extract_core.transform(vanilla, stage), rel
+                assert shader == extract_core.transform(vanilla, stage, entity_caster=stem == 'entity' and
+                    (args.root / 'assets/chroma/shaders/include/shadow_config.glsl').exists()), rel
                 if stage == 'vsh':
                     assert 'vec4(pixel / ScreenSize * 2.0 - 1.0, 1.0, 1.0)' in shader, rel
                     assert '131072.0' not in shader, rel

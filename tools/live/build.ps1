@@ -1,5 +1,5 @@
 $ErrorActionPreference='Stop'
-$taskJavaRoot='C:/Users/konst/AppData/Roaming/PrismLauncher/java/java-runtime-epsilon/bin'
+$taskJavaRoot=Join-Path $env:APPDATA 'PrismLauncher/java/java-runtime-epsilon/bin'
 & "$taskJavaRoot/javac.exe" --release 17 (Join-Path $PSScriptRoot 'ChromaLiveProbe.java') (Join-Path $PSScriptRoot 'AttachChromaProbe.java')
 if($LASTEXITCODE -ne 0){throw "javac exit $LASTEXITCODE"}
 $taskManifest=Join-Path $PSScriptRoot 'agent-manifest.mf'

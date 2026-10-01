@@ -1,4 +1,4 @@
-"""Check the GLSL quarter-cell cache's modulo addressing and retention rules."""
+"""Check compact quarter-cell confidence addressing and LOD reductions."""
 from itertools import product
 from pathlib import Path
 import random
@@ -54,6 +54,19 @@ def check_lod(rng):
                            for yz in range(4) for x in range(2))
             reference |= int(occupied) * (3 << (parent * 2))
         assert packed == reference
+    # Surface base retains four records per fine cell. Empty alpha masks cannot
+    # fill the LOD; conservative overflow can, even with no usable surface.
+    def surface_occupied(word):
+        return bool(word & 0x80000000 or word & 0x40000000 and word >> 14 & 65535)
+    for word, expected in ((0,False),(0x40000000,False),(0x40004000,True),(0x80000000,True)):
+        assert surface_occupied(word) == expected
+    for _ in range(1000):
+        records = [rng.getrandbits(32) for _ in range(512)]
+        result = sum((3 if any(surface_occupied(w) for w in records[i*32:(i+1)*32]) else 0) << (i*2) for i in range(16))
+        for i in range(16):
+            assert ((result >> (i*2)) & 3) == (3 if any((w & 0x80000000) != 0 or (w & 0x40000000) != 0 and (w//16384)%65536 != 0 for w in records[i*32:(i+1)*32]) else 0)
+    assert 'textureSize(InSampler, 0).y == 16384' in source
+    assert 'int record = index * 4' in source and '(word >> 14u) & 65535u' in source
     # Address the eight distinct input words at both supported mip dimensions.
     for n in (256, 128):
         columns, out_columns = n//16, n//32

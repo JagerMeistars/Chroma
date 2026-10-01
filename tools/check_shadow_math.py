@@ -14,7 +14,7 @@ from functools import lru_cache
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'assets/chroma/shaders/include/shadows.glsl').read_text()
 CONFIG = (ROOT / 'assets/chroma/shaders/include/shadow_config.glsl').read_text()
-FILTER = (ROOT / 'assets/chroma/shaders/include/shadow_filter.glsl').read_text()
+FILTER = (ROOT / 'assets/chroma/shaders/include/shadow_filter_static.glsl').read_text()
 
 
 def setting(name):
@@ -1017,7 +1017,8 @@ def check_local_search_gap():
 
 def main():
     pixelation = check_pixelation()
-    compact = re.sub(r'\s+', '', re.sub(r'//[^\n]*', '', SOURCE))
+    space = (ROOT / 'assets/chroma/shaders/include/voxel_space.glsl').read_text()
+    compact = re.sub(r'\s+', '', re.sub(r'//[^\n]*', '', SOURCE + space))
     for expression in (
         'CameraBlockPos*CHROMA_VOX_CELLS-origin',
         '(from-CameraOffset)*float(CHROMA_VOX_CELLS)',

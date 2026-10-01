@@ -11,8 +11,10 @@ def pack_files():
     files = [ROOT / 'pack.mcmeta', ROOT / 'README.md', ROOT / 'CREDITS.md']
     if (ROOT / 'pack.png').exists():
         files.append(ROOT / 'pack.png')
-    for directory in ('assets', 'docs'):
-        files.extend(p for p in (ROOT / directory).rglob('*') if p.is_file())
+    files.extend(p for p in (ROOT / 'assets').rglob('*') if p.is_file())
+    # Player-facing files only; development reports remain in the repository.
+    files.extend(ROOT / 'docs' / name for name in (
+        'README.en.md', 'README.ru.md', 'examples.mcfunction', 'examples-128.mcfunction'))
     return sorted(files)
 
 

@@ -31,14 +31,15 @@
       "persistent": true
     },
     "swap": {},
+    "surface_normal": {},
     "voxel": {
       "width": 4096,
-      "height": 256,
+      "height": 16384,
       "persistent": true
     },
     "voxel_history": {
       "width": 4096,
-      "height": 256,
+      "height": 16384,
       "persistent": true
     },
     "voxel_meta": {
@@ -80,6 +81,15 @@
       "width": 1024,
       "height": 1,
       "persistent": true
+    },
+    "shadow_surface": {
+      "width": 2048,
+      "height": 1024,
+      "persistent": true
+    },
+    "vacancy_depth": {
+      "width": 256,
+      "height": 256
     }
   },
   "passes": [
@@ -170,7 +180,55 @@
       "output": "tile_masks"
     },
     {
+      "vertex_shader": "chroma:post/voxel_update",
+      "fragment_shader": "chroma:post/surface_normal",
+      "inputs": [
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Meta",
+          "target": "voxel_meta_history"
+        },
+        {
+          "sampler_name": "InDepth",
+          "target": "minecraft:main",
+          "use_depth_buffer": true
+        },
+        {
+          "sampler_name": "MainColor",
+          "target": "minecraft:main"
+        },
+        {
+          "sampler_name": "Catalog",
+          "target": "catalog"
+        }
+      ],
+      "output": "surface_normal"
+    },
+    {
       "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/vacancy_depth",
+      "inputs": [
+        {
+          "sampler_name": "InDepth",
+          "target": "minecraft:main",
+          "use_depth_buffer": true
+        },
+        {
+          "sampler_name": "MainColor",
+          "target": "minecraft:main"
+        },
+        {
+          "sampler_name": "Catalog",
+          "target": "catalog"
+        }
+      ],
+      "output": "vacancy_depth"
+    },
+    {
+      "vertex_shader": "chroma:post/voxel_update",
       "fragment_shader": "chroma:post/voxel_update",
       "inputs": [
         {
@@ -187,6 +245,10 @@
           "use_depth_buffer": true
         },
         {
+          "sampler_name": "SurfaceNormal",
+          "target": "surface_normal"
+        },
+        {
           "sampler_name": "MainColor",
           "target": "minecraft:main"
         },
@@ -197,6 +259,10 @@
         {
           "sampler_name": "Catalog",
           "target": "catalog"
+        },
+        {
+          "sampler_name": "VacancyDepth",
+          "target": "vacancy_depth"
         }
       ],
       "output": "voxel"
@@ -217,23 +283,39 @@
       "output": "voxel_meta"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/voxel_update",
       "fragment_shader": "chroma:post/voxel_lod",
       "inputs": [
         {
           "sampler_name": "In",
           "target": "voxel"
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Meta",
+          "target": "voxel_meta_history"
         }
       ],
       "output": "voxel_lod1"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/voxel_update",
       "fragment_shader": "chroma:post/voxel_lod",
       "inputs": [
         {
           "sampler_name": "In",
           "target": "voxel_lod1"
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Meta",
+          "target": "voxel_meta_history"
         }
       ],
       "output": "voxel_lod2"
@@ -289,6 +371,41 @@
       "output": "shadow_map"
     },
     {
+      "vertex_shader": "minecraft:core/screenquad",
+      "fragment_shader": "chroma:post/shadow_surface",
+      "inputs": [
+        {
+          "sampler_name": "Shadow",
+          "target": "shadow_map"
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "CurrentShadowMeta",
+          "target": "shadow_meta"
+        },
+        {
+          "sampler_name": "PreviousShadowMeta",
+          "target": "shadow_meta_history"
+        },
+        {
+          "sampler_name": "VoxelMeta",
+          "target": "voxel_meta"
+        },
+        {
+          "sampler_name": "Voxel",
+          "target": "voxel"
+        },
+        {
+          "sampler_name": "VoxelLod1",
+          "target": "voxel_lod1"
+        }
+      ],
+      "output": "shadow_surface"
+    },
+    {
       "vertex_shader": "chroma:post/shade",
       "fragment_shader": "chroma:post/shade",
       "inputs": [
@@ -318,23 +435,39 @@
           "target": "catalog"
         },
         {
+          "sampler_name": "Surface",
+          "target": "shadow_surface"
+        },
+        {
           "sampler_name": "Shadow",
           "target": "shadow_map"
         },
         {
           "sampler_name": "Voxel",
           "target": "voxel"
+        },
+        {
+          "sampler_name": "VoxelLod1",
+          "target": "voxel_lod1"
         }
       ],
       "output": "swap"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
-      "fragment_shader": "chroma:post/copy",
+      "vertex_shader": "chroma:post/voxel_update",
+      "fragment_shader": "chroma:post/voxel_history",
       "inputs": [
         {
           "sampler_name": "In",
           "target": "voxel"
+        },
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "Meta",
+          "target": "voxel_meta_history"
         }
       ],
       "output": "voxel_history"
