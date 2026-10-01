@@ -72,10 +72,13 @@ Edit `assets/chroma/shaders/include/shadow_config.glsl`:
 
 | Setting | Default and effect |
 | --- | --- |
+| `CHROMA_SHADOWS_ENABLED` | `1`: shadows on; `0`: shadows off, lights stay on and pass through walls |
+| `CHROMA_SHADOW_QUALITY` | `2`: normal (default); `1`: faster, coarser shadows and penumbrae |
 | `CHROMA_SHADOW_PIXELATE` | `1`: pixelated light/shadows; `0`: continuous sampling |
 | `CHROMA_SHADOW_PIXELS_PER_BLOCK` | `16`: subdivisions per block when pixelation is enabled |
 | `CHROMA_SOURCE_SIZE` | `0.35`: source radius; larger values produce softer shadows |
-| `CHROMA_SHADOW_SAMPLES` | `16`: normal quality; `8`: fewer samples, potentially faster but coarser |
+
+For more FPS, try `CHROMA_SHADOW_QUALITY 1`; to disable shadow calculations, set `CHROMA_SHADOWS_ENABLED 0`. Save and press **F3+T**. Quality sets the map size and sample count automatically. FPS gains depend on the scene; switching shadows off does not release their reserved video memory.
 
 Chroma's extra fog is off by default (`FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`). Disable hemisphere flicker with `CHROMA_FLICKER_AMOUNT 0.0` in `assets/chroma/shaders/include/flicker.glsl`.
 

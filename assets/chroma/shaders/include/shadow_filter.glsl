@@ -8,7 +8,7 @@ uniform sampler2D ShadowSampler;
 uniform sampler2D SurfaceSampler;
 uniform sampler2D VoxelSampler;
 uniform sampler2D VoxelLod1Sampler;
-const int CHROMA_SHADOW_RES = 128;
+const int CHROMA_SHADOW_RES = CHROMA_SHADOW_MAP_SIZE;
 const ivec2 CHROMA_BLOCKER_OFFSETS[9] = ivec2[9](
     ivec2(0,0), ivec2(-1,0), ivec2(1,0), ivec2(0,-1), ivec2(0,1),
     ivec2(-1,-1), ivec2(1,-1), ivec2(-1,1), ivec2(1,1));
@@ -120,7 +120,7 @@ void chromaPcssBasis(vec3 axis, out vec3 tangent, out vec3 bitangent) {
 }
 float chromaPcssTexelSlope(vec3 axis) {
     // Angular Jacobian of octahedral decoding at this continuous direction.
-    // A texel is not 1/128 radians; its footprint varies over the octahedron.
+    // A texel's angular footprint varies over the octahedron.
     float scale = abs(axis.x) + abs(axis.y) + abs(axis.z);
     vec2 signs = mix(vec2(-1.0), vec2(1.0), greaterThanEqual(axis.xy, vec2(0.0)));
     vec3 dx = vec3(1.0, 0.0, -signs.x);

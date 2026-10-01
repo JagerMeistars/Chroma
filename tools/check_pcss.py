@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'assets/chroma/shaders/include/shadow_filter.glsl').read_text()
 CONFIG = (ROOT / 'assets/chroma/shaders/include/shadow_config.glsl').read_text()
 RES = 128
+SAMPLES = 16
 MAX_SLOPE = 1.0
 MAX_BIAS = .05
 
@@ -121,8 +122,9 @@ def hybrid_weight(slope, width):
 
 
 def pcss(depth_at, receiver, normal, light=(0., 0., 0.), radius=14., source_radius=.35,
-         samples=16, hard_at=None, frame=basis):
+         samples=None, hard_at=None, frame=basis):
     """Reference filter; inputs use the same already-canonical map origin."""
+    if samples is None: samples = SAMPLES
     if not math.isfinite(radius) or radius <= 0: return 1.
     delta = sub(receiver, light)
     distance, nlength = length(delta), length(normal)
@@ -248,7 +250,7 @@ def check_seams():
     for _ in range(1000):
         direction = unit(tuple(rng.uniform(-1, 1) for _ in range(3)))
         pixel = tuple(math.floor(v*RES) for v in uv(direction))
-        assert length(sub(direction, ray_at(pixel))) < .04
+        assert length(sub(direction, ray_at(pixel))) < 5.12 / RES
     # A continuous sphere function must remain continuous at octahedral seams;
     # this expected function does not know the texture folding implementation.
     value = lambda ray: .5 + dot(ray, (.1, -.2, .15))
@@ -257,6 +259,40 @@ def check_seams():
             a, b = list(base), list(base)
             a[axis] -= 1e-7; b[axis] += 1e-7
             assert abs(normalized(bilinear(unit(a), value))-normalized(bilinear(unit(b), value))) < 1e-5
+
+
+def check_quality_layout():
+    # Check all 128 lamp tiles, including every seam query, against the producer
+    # and consumer addressing. Low quality must never alias the unused atlas.
+    assert '#define CHROMA_SHADOWS_ENABLED 1' in CONFIG
+    assert '#define CHROMA_SHADOW_QUALITY 2' in CONFIG
+    for quality, size, taps in ((1, 64, 8), (2, 128, 16)):
+        assert re.search(rf'#(?:if|elif) CHROMA_SHADOW_QUALITY == {quality}\s+'
+                         rf'#define CHROMA_SHADOW_MAP_SIZE {size}\s+'
+                         rf'#define CHROMA_SHADOW_SAMPLES {taps}', CONFIG)
+    for shader in ('shadow_map', 'shadow_surface'):
+        producer = (ROOT/f'assets/chroma/shaders/post/{shader}.fsh').read_text()
+        assert 'if (any(greaterThanEqual(pixel, ivec2(16, 8) * CHROMA_SHADOW_MAP_SIZE))) discard;' in producer
+        assert 'pixel.x / CHROMA_SHADOW_MAP_SIZE + (pixel.y / CHROMA_SHADOW_MAP_SIZE) * 16' in producer
+        assert 'pixel & ivec2(CHROMA_SHADOW_MAP_SIZE - 1)' in producer
+        assert '/ float(CHROMA_SHADOW_MAP_SIZE)' in producer
+    for shader in ('shadow_filter', 'shadow_filter_static'):
+        consumer = (ROOT/f'assets/chroma/shaders/include/{shader}.glsl').read_text()
+        assert 'const int CHROMA_SHADOW_RES = CHROMA_SHADOW_MAP_SIZE;' in consumer
+        assert 'ivec2(lamp % 16, lamp / 16) * CHROMA_SHADOW_RES' in consumer
+        assert 'i < CHROMA_SHADOW_SAMPLES' in consumer
+    for lamp in range(128):
+        tile = lamp % 16 * RES, lamp // 16 * RES
+        for edge in range(-1, RES+1):
+            for pixel in ((edge, -1), (edge, RES), (-1, edge), (RES, edge)):
+                local = fold(pixel)
+                absolute = tuple(a+b for a, b in zip(tile, local))
+                assert 0 <= absolute[0] < 16*RES and 0 <= absolute[1] < 8*RES
+                assert absolute[0]//RES + absolute[1]//RES*16 == lamp
+                assert tuple(v & (RES-1) for v in absolute) == local
+    # Without the active-extent guard, this unused texel aliases lamp 16.
+    if RES < 128:
+        assert (16*RES)//RES == 16 and 16*RES < 2048
 
 
 def check_planes():
@@ -495,7 +531,9 @@ def check_hard_geometry():
 
 
 def main():
+    global RES, SAMPLES
     source_contracts()
+    check_quality_layout()
     check_seams()
     planes, naive = check_planes()
     check_contact_and_limits()
@@ -506,6 +544,14 @@ def main():
           f'1000 octahedral directions and folded borders; contact geometry; finite/embedded/zero-radius/hemisphere/bias controls; '
           f'moving origins. Half-plane hard={hard}, soft={soft}.')
     print(f'Hybrid finite-mask checks={hard_checks}; subtexel hole depth-only={alias}, hybrid={repaired}; basis repro old={old_basis}, new={new_basis}; continuous kernel blend.')
+    RES, SAMPLES = 64, 8
+    check_quality_layout()
+    check_seams()
+    low_planes, _ = check_planes()
+    check_contact_and_limits()
+    low_hard, low_soft = check_edge_and_origins()
+    print(f'Low quality CPU: 64x64 / 8 taps; 128 lamp tiles and folded seams; {low_planes} analytic planes; '
+          f'contact/limits and moving origins; half-plane hard={low_hard}, soft={low_soft}.')
     print('CPU reference/source contracts only; GLSL compilation, live image quality and FPS are not established.')
 
 

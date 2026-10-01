@@ -7,6 +7,7 @@ from pathlib import Path
 import argparse
 import json
 import os
+import re
 import subprocess
 import zipfile
 
@@ -55,6 +56,17 @@ def main():
                 if p.is_file():
                     z.write(p, p.relative_to(ROOT).as_posix())
     stages = report / 'roundtrip'
+    driver_args = [stages]
+    with zipfile.ZipFile(archive) as z:
+        config = z.read('assets/chroma/shaders/include/shadow_config.glsl').decode('utf-8') if 'assets/chroma/shaders/include/shadow_config.glsl' in z.namelist() else ''
+        enabled = re.search(r'^#define\s+CHROMA_SHADOWS_ENABLED\s+([01])\s*$', config, re.M)
+        if enabled:
+            chain = json.loads(z.read('assets/minecraft/post_effect/end_of_frame.json'))
+            shadow_passes = [f'post_pass_{i:03d}.vsh' for i, p in enumerate(chain['passes'])
+                             if p['output'].startswith(('voxel', 'shadow_', 'surface_normal', 'vacancy_'))]
+            shade = next(i for i, p in enumerate(chain['passes']) if p['fragment_shader'] == 'chroma:post/shade')
+            assert shadow_passes, 'No shadow passes checked'
+            driver_args += [enabled[1], ','.join(shadow_passes), f'post_pass_{shade:03d}.vsh']
     # Remove only this check's prior generated shader files to avoid stale success.
     if stages.exists():
         for p in stages.iterdir():
@@ -63,7 +75,7 @@ def main():
     for name, parameters in (
         ('ValidatePack', [archive, jar]),
         ('ReproduceClientShaders', [archive, jar, stages]),
-        ('CheckDriver', [stages]),
+        ('CheckDriver', driver_args),
         ('CheckExamples', [ROOT, report / 'examples-validation.json']),
     ):
         argfile = report / (name + '.args')

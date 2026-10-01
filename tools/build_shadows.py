@@ -14,7 +14,7 @@ def target_input(name, target, **kwargs):
     return dict(sampler_name=name, target=target, **kwargs)
 
 
-def render_pass(shader, output, inputs, vertex='minecraft:core/screenquad'):
+def render_pass(shader, output, inputs, vertex='chroma:post/shadow_pass'):
     return dict(vertex_shader=vertex, fragment_shader='chroma:post/' + shader,
                 inputs=inputs, output=output)
 

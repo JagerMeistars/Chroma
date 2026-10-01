@@ -11,7 +11,7 @@ uniform sampler2D PreviousShadowMetaSampler;
 uniform sampler2D VoxelMetaSampler;
 layout(location = 0) out vec4 fragColor;
 
-// Source-space radial distances: 128x128 octahedral maps, 16 columns x 8 rows.
+// Source-space radial distances: quality-sized maps, 16 columns x 8 rows.
 // texelFetch consumers must fold octahedral seams before addressing a neighbour.
 vec3 chromaShadowOctDecode(vec2 point) {
     vec3 direction = vec3(point, 1.0 - abs(point.x) - abs(point.y));
@@ -25,7 +25,8 @@ vec3 chromaShadowOctDecode(vec2 point) {
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    int lamp = pixel.x / 128 + (pixel.y / 128) * 16;
+    if (any(greaterThanEqual(pixel, ivec2(16, 8) * CHROMA_SHADOW_MAP_SIZE))) discard;
+    int lamp = pixel.x / CHROMA_SHADOW_MAP_SIZE + (pixel.y / CHROMA_SHADOW_MAP_SIZE) * 16;
     int base = lamp * 8;
     if (lamp >= CHROMA_LAMPS
             || chromaVoxDecode(texelFetch(CurrentShadowMetaSampler, ivec2(base + 7, 0), 0)) != 1u) {
@@ -48,7 +49,8 @@ void main() {
         fragColor = texelFetch(PreviousShadowSampler, pixel, 0);
         return;
     }
-    vec2 oct = (vec2(pixel & ivec2(127)) + 0.5) / 128.0 * 2.0 - 1.0;
+    vec2 oct = (vec2(pixel & ivec2(CHROMA_SHADOW_MAP_SIZE - 1)) + 0.5)
+             / float(CHROMA_SHADOW_MAP_SIZE) * 2.0 - 1.0;
     vec3 direction = chromaShadowOctDecode(oct);
     vec3 light = transpose(chromaMdRot(MatDecSampler, 0))
                * chromaMdLampEyeOf(MatDecSampler, lamp);

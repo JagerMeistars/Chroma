@@ -13,6 +13,11 @@ layout(location = 12) flat out int historyValid;
 layout(location = 13) flat out ivec3 previousOrigin;
 layout(location = 14) flat out uint frame;
 void main() {
+#if !CHROMA_SHADOWS_ENABLED
+    // Skip the large cache targets before rasterization when shadows are off.
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+#endif
     vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
     // One fragment now owns one cell. Decode draw-constant state only at the

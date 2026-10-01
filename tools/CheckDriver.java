@@ -30,6 +30,25 @@ public class CheckDriver {
             throw new IllegalStateException(glGetShaderInfoLog(shader));
         return shader;
     }
+    static void checkRaster(int vertex, int expected, String name) {
+        int fragment = compile(GL_FRAGMENT_SHADER,
+            "#version 330 core\nlayout(location=0) out vec4 color; void main(){color=vec4(1.0);}");
+        int program = glCreateProgram();
+        glAttachShader(program, vertex); glAttachShader(program, fragment); glLinkProgram(program);
+        if (glGetProgrami(program, GL_LINK_STATUS) == 0)
+            throw new IllegalStateException(glGetProgramInfoLog(program));
+        int vao = glGenVertexArrays(), query = glGenQueries();
+        glBindVertexArray(vao); glUseProgram(program); glViewport(0, 0, 32, 32);
+        glBeginQuery(GL_SAMPLES_PASSED, query);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glEndQuery(GL_SAMPLES_PASSED);
+        int samples = glGetQueryObjecti(query, GL_QUERY_RESULT);
+        int error = glGetError();
+        if (error != GL_NO_ERROR || samples != expected)
+            throw new AssertionError(name + " raster samples=" + samples + " expected=" + expected + " GL error=" + error);
+        glUseProgram(0); glDeleteQueries(query); glDeleteVertexArrays(vao);
+        glDeleteProgram(program); glDeleteShader(fragment);
+    }
     public static void main(String[] args) throws Exception {
         if (!glfwInit()) throw new IllegalStateException("GLFW init failed");
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -42,6 +61,10 @@ public class CheckDriver {
         glfwMakeContextCurrent(window);
         GL.createCapabilities();
         int count = 0;
+        int rasterChecks = 0;
+        Set<String> shadowPasses = args.length > 1
+            ? new HashSet<>(Arrays.asList(args[2].split(","))) : Set.of();
+        boolean shadowsEnabled = args.length > 1 && args[1].equals("1");
         System.out.println("GPU " + glGetString(GL_RENDERER) + " " + glGetString(GL_VERSION));
         try (var paths = Files.list(Path.of(args[0]))) {
             for (Path vertex : paths.sorted().toList()) {
@@ -53,6 +76,25 @@ public class CheckDriver {
                 glAttachShader(p, v); glAttachShader(p, f); glLinkProgram(p);
                 if (glGetProgrami(p, GL_LINK_STATUS) == 0)
                     throw new IllegalStateException(vertex + ": " + glGetProgramInfoLog(p));
+                String name = vertex.getFileName().toString();
+                if (shadowPasses.contains(name)) {
+                    checkRaster(v, shadowsEnabled ? 1024 : 0, name);
+                    rasterChecks++;
+                }
+                if (args.length > 1 && name.equals(args[3])) {
+                    // Lighting must still rasterize; disabled shadows must not
+                    // retain any active shadow/cache texture reads in its program.
+                    checkRaster(v, 1024, name);
+                    rasterChecks++;
+                    if (!shadowsEnabled) {
+                        for (int i = 0; i < glGetProgrami(p, GL_ACTIVE_UNIFORMS); ++i) {
+                            String uniform = glGetActiveUniformName(p, i, 512);
+                            if (uniform.contains("ShadowSampler") || uniform.contains("SurfaceSampler")
+                                    || uniform.contains("VoxelSampler") || uniform.contains("VoxelLod1Sampler"))
+                                throw new AssertionError("Disabled shade still uses " + uniform);
+                        }
+                    }
+                }
                 glDeleteProgram(p); glDeleteShader(v); glDeleteShader(f);
                 count++;
             }
@@ -60,5 +102,11 @@ public class CheckDriver {
         glfwDestroyWindow(window); glfwTerminate();
         if (count == 0) throw new IllegalStateException("No programs checked");
         System.out.println("DRIVER_LINK programs=" + count + " failures=0 client_gameplay=false");
+        if (args.length > 1) {
+            if (rasterChecks != shadowPasses.size() + 1)
+                throw new AssertionError("Missing shadow raster checks");
+            System.out.println("SHADOW_RASTER enabled=" + shadowsEnabled + " passes=" + shadowPasses.size()
+                + " shadow_samples=" + (shadowsEnabled ? 1024 : 0) + " lighting_samples=1024 failures=0");
+        }
     }
 }

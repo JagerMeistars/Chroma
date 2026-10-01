@@ -208,7 +208,7 @@
       "output": "surface_normal"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/vacancy_depth",
       "inputs": [
         {
@@ -268,7 +268,7 @@
       "output": "voxel"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/voxel_meta",
       "inputs": [
         {
@@ -321,7 +321,7 @@
       "output": "voxel_lod2"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/shadow_meta",
       "inputs": [
         {
@@ -332,7 +332,7 @@
       "output": "shadow_meta"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/shadow_map",
       "inputs": [
         {
@@ -371,7 +371,7 @@
       "output": "shadow_map"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/shadow_surface",
       "inputs": [
         {
@@ -473,7 +473,7 @@
       "output": "voxel_history"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/copy",
       "inputs": [
         {
@@ -484,7 +484,7 @@
       "output": "voxel_meta_history"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/copy",
       "inputs": [
         {
@@ -495,7 +495,7 @@
       "output": "shadow_map_history"
     },
     {
-      "vertex_shader": "minecraft:core/screenquad",
+      "vertex_shader": "chroma:post/shadow_pass",
       "fragment_shader": "chroma:post/copy",
       "inputs": [
         {

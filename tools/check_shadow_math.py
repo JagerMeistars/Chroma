@@ -440,7 +440,7 @@ def pcss(receiver,normal,light,boxes,n,radius,light_radius=1e6,bias=.035,legacy_
 
 
 def check_octahedral(rng,radius):
-    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    n = 64 if setting('CHROMA_SHADOW_QUALITY') == 1 else 128
     source = re.sub(r'\s+','',re.sub(r'//[^\n]*','',FILTER))
     assert 'chromaBoundedReference' not in source, 'Hard plane-footprint rejection makes shadow contours discontinuous'
     assert 'reference=reference>1e5?distance:max(distance,reference);' in source
@@ -554,7 +554,7 @@ def check_room_occlusion(radius):
         else: assert lambert>0
     assert max(-.5+.75,0)/1.75 > 0, 'Fixture must expose the removed wrap leak'
 
-    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    n = 64 if setting('CHROMA_SHADOW_QUALITY') == 1 else 128
     tested = 0
     # Axis permutations/signs keep the independent blocker an exact AABB while
     # exercising different octahedral faces and folds, not one favorable tile.
@@ -587,7 +587,7 @@ def check_shadow_contour(radius):
     straight line x=-z/2. A disk source softens that edge, without isolated lit
     islands or full lit-to-dark reversals while moving toward the clear side.
     """
-    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    n = 64 if setting('CHROMA_SHADOW_QUALITY') == 1 else 128
 
     def contour(permutation,sign,legacy=False):
         rotate = lambda v: tuple(sign*v[i] for i in permutation)
@@ -859,7 +859,7 @@ def check_receiver_hull(radius):
     shaded surface stays at its original position. This exposes strict planar
     self-hit recognition that incorrectly shadows slabs and sloped surfaces.
     """
-    n = int(re.search(r'CHROMA_SHADOW_RES\s*=\s*(\d+)',FILTER)[1])
+    n = 64 if setting('CHROMA_SHADOW_QUALITY') == 1 else 128
     count = 0
     for normal in ((0,1,0),(1,0,0),unit((.3,1,-.2)),unit((1,1,1))):
         tangent = unit(cross(normal,(0,0,1)))

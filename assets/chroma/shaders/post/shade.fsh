@@ -156,7 +156,7 @@ void main() {
     // Falloff, cone edges and shadows use the same world-grid surface sample.
     lightReceiver = transpose(cameraInvRot) * worldReceiver;
 #endif
-#if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS == 2 && CHROMA_TRANSPARENT_DEPTH_MASK
+#if CHROMA_SHADOWS_ENABLED && !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS == 2 && CHROMA_TRANSPARENT_DEPTH_MASK
     // Keep receiving normal Chroma/world shadows, without contact self-shadow.
     bool entityReceiver = chromaEntityShadowTag(texelFetch(InSampler,
         ivec2(suv * vec2(frameSize)), 0).a);
@@ -196,6 +196,7 @@ void main() {
                 }
                 surfaceWeight = LIGHT_STRENGTH * diff * fall;
                 unshadowedWeight = surfaceWeight;
+#if CHROMA_SHADOWS_ENABLED
                 if (surfaceWeight > 0.0001) {
                     // Colour and cone shape do not change radial occlusion.
                     // Reuse an exact colocated source; distinct positions stay independent.
@@ -213,6 +214,7 @@ void main() {
                     surfaceWeight *= visibility;
                     shadowDebug = min(shadowDebug, visibility);
                 }
+#endif
             }
         }
         if (surfaceWeight == 0.0) continue;
@@ -246,7 +248,7 @@ void main() {
     outc = mix(albedo, outc, reach);
     outc = mix(outc, FOG_COLOR, fogF);
     fragColor = vec4(outc, 1.0);
-#if CHROMA_SHADOW_DEBUG
+#if CHROMA_SHADOWS_ENABLED && CHROMA_SHADOW_DEBUG
     fragColor = vec4(vec3(shadowDebug), 1.0);
 #endif
 }

@@ -3,7 +3,7 @@
 #include <chroma:voxel_space.glsl>
 uniform sampler2D ShadowSampler;
 uniform sampler2D VoxelSampler;
-const int CHROMA_SHADOW_RES = 128;
+const int CHROMA_SHADOW_RES = CHROMA_SHADOW_MAP_SIZE;
 const ivec2 CHROMA_BLOCKER_OFFSETS[9] = ivec2[9](
     ivec2(0,0), ivec2(-1,0), ivec2(1,0), ivec2(0,-1), ivec2(0,1),
     ivec2(-1,-1), ivec2(1,-1), ivec2(-1,1), ivec2(1,1));
@@ -214,7 +214,7 @@ float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float light
         // The immediate 3x3 neighbourhood closes the gap between a thin
         // caster and the eight wider probes. The normalized tent reaches zero
         // at its outer edge, so changing the nearest texel keeps weights continuous.
-        // Seventeen map reads; the sixteen geometric PCF rays are unchanged.
+        // Seventeen map reads; quality controls the later geometric PCF rays.
         for (int j = 0; j < (i == 0 ? 9 : 1); ++j) {
             ivec2 pixel = i == 0 ? middle + CHROMA_BLOCKER_OFFSETS[j] : ivec2(p + 0.5);
             vec2 weights = max(vec2(1.5) - abs(vec2(pixel) - p), vec2(0.0));
@@ -259,9 +259,9 @@ float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float light
     float foregroundLimit = max(distance * 0.5,
         min(distance, farthestBlocker + texelFootprint));
     vec2 visible = vec2(0.0);
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < CHROMA_SHADOW_SAMPLES; ++i) {
         float angle = float(i) * 2.39996323;
-        float radius = sqrt((float(i) + 0.5) / 16.0) * filterAngle;
+        float radius = sqrt((float(i) + 0.5) / float(CHROMA_SHADOW_SAMPLES)) * filterAngle;
         vec3 ray = normalize(axis + radius * (cos(angle) * tangent + sin(angle) * bitangent));
         visible += chromaShadowPCF(lamp, ray, light, normal, surfacePlane, distance, footprint, lightRadius, receiverBias, foregroundLimit, seedCount, seedCells);
     }
