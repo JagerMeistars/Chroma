@@ -6,7 +6,7 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 ### Start
 
-1. Download Chroma from [Releases](https://github.com/JagerMeistars/Chroma/releases/latest).
+1. Download `Chroma-26.3.zip` from [Releases](https://github.com/JagerMeistars/Chroma/releases/latest).
 2. Put the ZIP in `minecraft/resourcepacks`, enable it, and turn on **Improved Transparency**.
 3. Follow the [English guide](docs/README.en.md) to spawn and configure lights.
 
@@ -21,7 +21,7 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 ### Начать
 
-1. Скачай Chroma в [релизах](https://github.com/JagerMeistars/Chroma/releases/latest).
+1. Скачай `Chroma-26.3.zip` в [релизах](https://github.com/JagerMeistars/Chroma/releases/latest).
 2. Положи ZIP в `minecraft/resourcepacks`, включи его и **Improved Transparency**.
 3. Инструкция по [созданию и настройке источников](docs/README.ru.md).
 
@@ -29,8 +29,9 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 - [Русское руководство](docs/README.ru.md)
 - [English player guide](docs/README.en.md)
-- [Справка о тенях](docs/SHADOWS.md)
 
 ---
 
-[Credits](CREDITS.md)
+[MIT License](LICENSE) · © 2026 JagerMeistars
+
+Based on Chroma from RPDREVO. Shadow research reference: [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI). Minecraft-derived shader portions retain their original rights.

@@ -4,9 +4,9 @@ Coloured lights and world shadows for **Minecraft Java 26.3**. No mod is require
 
 ## Install
 
-1. Download `Chroma-Shadows-Dynamic-26.3.zip` (**WorldEntities2**) from [Releases](https://github.com/JagerMeistars/Chroma/releases). Choose `Chroma-Auto-26.3.zip` instead if you want lights without shadows.
+1. Download `Chroma-26.3.zip` from [Releases](https://github.com/JagerMeistars/Chroma/releases/latest).
 2. Put the ZIP in `minecraft/resourcepacks`, then enable **only one Chroma pack** at highest priority in **Options → Resource Packs**. Every player who wants to see the effect must enable it.
-3. For Dynamic, enable **Improved Transparency**. When replacing the same pack, press **F3+T**; when choosing another ZIP, select it in Resource Packs first.
+3. Enable **Improved Transparency**. After replacing the pack, press **F3+T**.
 
 ## Spawn your first lamp
 
@@ -57,7 +57,7 @@ Each command below affects **only the nearest example lamp within 16 blocks**. F
 /kill @e[type=minecraft:item_display,tag=chroma.demo.warm,distance=..16,sort=nearest,limit=1]
 ```
 
-Spotlight rotation uses the display's yaw/pitch with the example's identity quaternions. The hemisphere always points world-down.
+Use `Rotation` to aim a spotlight. The hemisphere always points down.
 
 | Rotation component | Values |
 | --- | --- |
@@ -68,7 +68,7 @@ Spotlight rotation uses the display's yaw/pitch with the example's identity quat
 
 To edit settings, extract the pack into a folder in `resourcepacks`; `pack.mcmeta` and `assets` must be directly inside it. Enable that folder **instead of the ZIP**, edit the file, save, then press **F3+T**.
 
-For Dynamic, edit `assets/chroma/shaders/include/shadow_config.glsl`:
+Edit `assets/chroma/shaders/include/shadow_config.glsl`:
 
 | Setting | Default and effect |
 | --- | --- |
@@ -81,7 +81,7 @@ Disable fog with `FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`. Di
 
 ## Optional flashlight
 
-Download `Chroma-Flashlight-Test-26.3.zip` from [Releases](https://github.com/JagerMeistars/Chroma/releases), put it in your world's `datapacks` folder, then run as a player:
+Copy the [`datapacks/chroma_flashlight`](https://github.com/JagerMeistars/Chroma/tree/main/datapacks/chroma_flashlight) folder from the repository into your world's `datapacks` folder, then run as a player:
 
 ```mcfunction
 /reload
@@ -93,6 +93,6 @@ Stop with `/function chroma_flashlight:stop` before removing the datapack. It cr
 ## Practical limits
 
 - Up to **128 simultaneously rendered lamps**. Sources must be loaded and rendered; many overlapping lights can reduce FPS.
-- Dynamic shadows use **previously observed geometry** within a moving 64-block window. Unseen objects or edits behind the camera are unknown, and moving models can leave retained geometry until empty space is observed. Press **F3+T** after changing worlds or dimensions. Auto light passes through walls.
-- Chroma's contribution is independent of vanilla lighting. It adds colour: high brightness can wash out light surfaces; reduce the lamp brightness.
+- Objects you have not looked at may cast incorrect shadows. Look at an area after moving or changing blocks there. Press **F3+T** after changing worlds or dimensions.
+- Chroma uses the surface's existing colour and texture; its brightness also depends on vanilla lighting.
 - Everything is **visual**: block-light levels and mob spawning do not change. Fog can remain visible without lamps.

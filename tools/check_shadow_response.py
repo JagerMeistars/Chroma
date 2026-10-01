@@ -29,20 +29,13 @@ def aces(x):
     return min(max(x*(2.51*x+.03)/(x*(2.43*x+.59)+.14),0),1)
 
 
-def legacy_output(albedo, lamps, bounded=True):
+def output(albedo, lamps, bounded=True):
     reach,hue = aggregate(lamps,bounded)
     full = tuple(a*(1+4*h) for a,h in zip(albedo,hue))
     lum = dot(full,LUMA)
     hue_scale = aces(lum)/max(lum,1e-4)
     toned = tuple(.4*aces(c)+.6*c*hue_scale for c in full)
     return tuple(a+(b-a)*reach for a,b in zip(albedo,toned))
-
-
-def output(scene, lamps, bounded=True):
-    # A fixed neutral response separates the added lamp from native light.
-    reference = (.25,)*3
-    lit = legacy_output(reference, lamps, bounded)
-    return tuple(base+max(value-.25, 0) for base,value in zip(scene,lit))
 
 
 def main():
@@ -62,9 +55,9 @@ def main():
         'reachLum+=min(unshadowedLum,LOOK_FULL_LUM)*visibility;',
         'floatenv=smoothstep(0.0,LOOK_FULL_LUM,reachLum);',
         'vec3hueDir=radiance/radLum;',
-        '#defineLIGHT_REFERENCE0.25',
-        'lightResponse=vec3(LIGHT_REFERENCE)*(1.0+hueDir*LOOK_CORE);',
-        'vec3outc=sceneColor+max(lightResponse-vec3(LIGHT_REFERENCE),vec3(0.0))*reach;',
+        'vec3albedo=texture(InSampler,texCoord).rgb;',
+        'outc=albedo*(1.0+hueDir*LOOK_CORE);',
+        'outc=mix(albedo,outc,reach);',
     ):
         assert expression in source, 'Update response reference after shader change: '+expression
     assert source.index('unshadowedWeight=surfaceWeight;') < source.index('surfaceWeight*=visibility;')
@@ -92,22 +85,6 @@ def main():
         assert output(albedo,partial+[((0,0,1e6),0)])==output(albedo,partial), 'A closed lamp must not dim other lamps'
         assert output(albedo,[(color,0) for color in colors])==albedo
 
-        # The independently varied scene represents night/day and vanilla
-        # torch light. Equal Chroma inputs must add identical RGB energy.
-        night = tuple(a*.03 for a in albedo)
-        day = tuple(a*.8+.1 for a in albedo)
-        a, b = output(night,partial), output(day,partial)
-        assert max(abs((x-u)-(y-v)) for x,u,y,v in zip(a,night,b,day)) < 1e-12
-        # Existing texture contrast is preserved before framebuffer clipping.
-        assert max(abs((x-y)-(u-v)) for x,y,u,v in zip(a,b,night,day)) < 1e-12
-        # LDR saturation can reduce visible energy; it cannot amplify it.
-        assert all(min(1,x)-base <= x-base+1e-12 for x,base in zip(b,day))
-
-    white = [((3.,3.,3.),1.)]
-    old_dark = legacy_output((.01,)*3,white)[0]-.01
-    old_bright = legacy_output((.5,)*3,white)[0]-.5
-    assert old_bright > old_dark*10, 'Counterexample must reproduce native-light amplification'
-
     # The rejected global visible/full ratio would dim this clear red to3/103.
     red,blue = (3/LUMA[0],0,0),(0,0,100/LUMA[2])
     assert aggregate([(red,1),(blue,0)])==aggregate([(red,1)])
@@ -123,10 +100,8 @@ def main():
 
     print(f'PASS: high-gain one-sample reach {old_step:.6f}->{new_step:.6f}; '
           'two-sample reach1->0.042969; single-sample response step<=0.09375')
-    print(f'PASS:2000 fully lit mixtures match the unbounded reference (max error{maximum_error:.2g}); '
+    print(f'PASS:2000 fully lit coloured mixtures unchanged (max error{maximum_error:.2g}); '
           'visible hue preserved, blocked sources isolated, all-blocked/monotonic/bounded response')
-    print('PASS:2000 independent night/day native colours add identical Chroma RGB; '
-          'texture differences retained before LDR clipping; old multiplicative counterexample reproduced.')
 
 
 if __name__=='__main__':

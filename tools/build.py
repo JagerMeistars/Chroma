@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def pack_files():
-    files = [ROOT / 'pack.mcmeta', ROOT / 'README.md', ROOT / 'CREDITS.md']
+    files = [ROOT / 'pack.mcmeta', ROOT / 'README.md', ROOT / 'LICENSE']
     if (ROOT / 'pack.png').exists():
         files.append(ROOT / 'pack.png')
     files.extend(p for p in (ROOT / 'assets').rglob('*') if p.is_file())
@@ -22,7 +22,7 @@ def main():
     if (ROOT / 'assets/chroma/shaders/include/shadow_config.glsl').is_file():
         from build_shadows import main as build_shadow
         return build_shadow()
-    out = ROOT / 'dist' / 'Chroma-Auto-26.3.zip'
+    out = ROOT / 'dist' / 'Chroma-26.3.zip'
     out.parent.mkdir(exist_ok=True)
     files = pack_files()
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:

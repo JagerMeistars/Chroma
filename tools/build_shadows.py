@@ -1,4 +1,4 @@
-"""Build either pure-RP shadow variant; keep the main Auto ZIP unchanged."""
+"""Build Chroma 26.3. Experimental builds require an explicit output path."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -114,6 +114,8 @@ def main():
     parser.add_argument('--prepare-dynamic', action='store_true', help='Update the source post chain')
     parser.add_argument('--debug', action='store_true', help='Diagnostic grayscale source visibility')
     args = parser.parse_args()
+    if (args.static_volume or args.debug) and not args.output:
+        parser.error('Experimental builds require --output; the release is Chroma-26.3.zip')
     volume = json.loads((args.static_volume/'metadata.json').read_text()) if args.static_volume else None
     chain = configure(json.loads((ROOT/CHAIN).read_text()), volume)
     if args.prepare_dynamic:
@@ -123,7 +125,7 @@ def main():
     kind = 'Static' if volume else 'Dynamic'
     meta = json.loads((ROOT/'pack.mcmeta').read_text(encoding='utf-8'))
     title = 'Chroma 26.3' + (' Static' if volume else '') + (' Debug' if args.debug else '')
-    meta['pack']['description'] = f'{title} · 128 lights / 128 источников · 26.3'
+    meta['pack']['description'] = title
     replacements['pack.mcmeta'] = (json.dumps(meta, ensure_ascii=False, indent=2)+'\n').encode()
     config = (ROOT/CONFIG).read_text()
     if args.debug:
@@ -138,8 +140,7 @@ def main():
             replacements[f'assets/chroma/textures/effect/shadows/{name}.png'] = (args.static_volume/(name+'.png')).read_bytes()
         replacements['docs/shadow-world.json'] = (args.static_volume/'metadata.json').read_bytes()
     replacements[CONFIG] = config.encode()
-    suffix = '-Debug' if args.debug else ''
-    out = args.output or ROOT/'dist'/f'Chroma-Shadows-{kind}-26.3{suffix}.zip'
+    out = args.output or ROOT/'dist'/'Chroma-26.3.zip'
     out.parent.mkdir(parents=True,exist_ok=True)
     with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
         for path in pack_files():
