@@ -2,7 +2,7 @@
 
 ## English
 
-Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource pack with up to 128 lights in five shapes.
+Coloured light, world shadows and normal maps for **Minecraft Java 26.3**. A vanilla resource pack with up to 128 lights in five shapes.
 
 ### Start
 
@@ -17,7 +17,7 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 ## Русский
 
-Цветной свет и мировые тени для **Minecraft Java 26.3**. Ресурспак без модов: до 128 источников пяти форм.
+Цветной свет, мировые тени и карты нормалей для **Minecraft Java 26.3**. Ресурспак без модов: до 128 источников пяти форм.
 
 ### Начать
 
@@ -34,4 +34,4 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 [MIT License](LICENSE) · © 2026 JagerMeistars
 
-Based on Chroma from RPDREVO. Shadow research reference: [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI). Minecraft-derived shader portions retain their original rights.
+Based on Chroma from RPDREVO. Research references: [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) and [JNNGL/vanilla-shaderpack](https://github.com/JNNGL/vanilla-shaderpack); normal-map code is independently implemented. Minecraft-derived assets retain their original rights.

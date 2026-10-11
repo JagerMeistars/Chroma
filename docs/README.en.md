@@ -1,6 +1,6 @@
 # Chroma — player guide
 
-Coloured lights and world shadows for **Minecraft Java 26.3**. No mod is required. [Русский](README.ru.md).
+Coloured lights, world shadows and normal maps for **Minecraft Java 26.3**. No mod is required. [Русский](README.ru.md).
 
 ## Install
 
@@ -81,6 +81,31 @@ Edit `assets/chroma/shaders/include/shadow_config.glsl`:
 For more FPS, try `CHROMA_SHADOW_QUALITY 1`; to disable shadow calculations, set `CHROMA_SHADOWS_ENABLED 0`. Save and press **F3+T**. Quality sets the map size and sample count automatically. FPS gains depend on the scene; switching shadows off does not release their reserved video memory.
 
 Chroma's extra fog is off by default (`FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`). Disable hemisphere flicker with `CHROMA_FLICKER_AMOUNT 0.0` in `assets/chroma/shaders/include/flicker.glsl`.
+
+## Normal maps
+
+Normal maps give textures relief under **Chroma lamps**. The pack includes maps generated from the colours of **1329 opaque and cutout block and block-entity textures**. **110 textures with partial transparency**, including glass, and downloaded player-head skins keep their previous appearance. Relief does not change block geometry or cast extra shadows.
+
+Edit `assets/chroma/shaders/include/normal_config.glsl`, then press **F3+T**:
+
+| Setting | Effect |
+| --- | --- |
+| `CHROMA_NORMAL_MAPS` | `1`: on (default); `0`: off |
+| `CHROMA_NORMAL_STRENGTH` | `1.0`: normal relief; `0.5`: subtler; `0.0`: flat |
+
+### Your own textures and models
+
+1. Keep your usual diffuse texture, for example `stone.png`. Add `stone_n.png` beside it with the **same dimensions**: an OpenGL RGB normal map; a flat normal is `(128, 128, 255)`. Block textures without a normal map get a generated one.
+2. Extract Chroma and open a terminal in that folder. With Python installed, run:
+
+```shell
+python -m pip install numpy Pillow
+python tools/normal_maps.py --source MyPack --output MyPack-Chroma
+```
+
+3. Put `MyPack-Chroma` in `resourcepacks`, enable it **above Chroma**, then press **F3+T**. Keep the original pack for later edits; convert it again after changes.
+
+The converter is included in the Chroma ZIP. For JSON models with their own geometry, align UV boundaries to whole pixels of the original texture; rotated and mirrored UVs are supported. Flat items whose shapes Minecraft generates from texture transparency keep their original textures and silhouettes, without relief.
 
 ## Optional flashlight
 

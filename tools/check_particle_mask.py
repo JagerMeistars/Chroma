@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import zipfile
+import extract_core
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,8 +50,15 @@ def main():
     # native shader behavior, including classic alpha, fog and cutoff.
     stripped = re.sub(r'\s*#if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK[^\n]*\n.*?#endif', '', source, flags=re.S)
     stripped = stripped.replace('#include <chroma:shadow_config.glsl>', '')
+    stripped = stripped.replace(extract_core.MATERIAL_INCLUDE, '')
+    stripped = stripped.replace('layout(location = 4) flat in ivec2 chromaMaterialPhase;\n', '')
+    stripped = stripped.replace(
+        '    ChromaMaterial chromaMaterial = chromaSampleMaterial(Sampler0, texCoord0, texture(Sampler0, texCoord0), chromaMaterialPhase);\n'
+        '    vec4 color = chromaMaterial.color * vertexColor * ColorModulator;',
+        '    vec4 color = texture(Sampler0, texCoord0) * vertexColor * ColorModulator;')
     with zipfile.ZipFile(jar_path) as jar:
         native = jar.read('assets/minecraft/shaders/core/particle.fsh').decode()
+        assert source == extract_core.transform_particle(native.replace('\r\n', '\n'))
         assert compact(stripped) == compact(native)
         bounds = compact(jar.read('assets/minecraft/shaders/include/oit_depth_bounds.glsl').decode())
         sample = compact(jar.read('assets/minecraft/shaders/include/oit_depth_sample.glsl').decode())

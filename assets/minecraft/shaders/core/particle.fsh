@@ -6,6 +6,8 @@
 #include <minecraft:oit.glsl>
 #include <chroma:shadow_config.glsl>
 
+#include <chroma:normal_material.glsl>
+
 uniform sampler2D Sampler0;
 
 layout(location = 0) in float sphericalVertexDistance;
@@ -27,13 +29,17 @@ vec4 calculateFinalColor(vec4 color) {
     return apply_fog(color, sphericalVertexDistance, cylindricalVertexDistance, FogEnvironmentalStart, FogEnvironmentalEnd, FogRenderDistanceStart, FogRenderDistanceEnd, fogColor);
 }
 
+layout(location = 4) flat in ivec2 chromaMaterialPhase;
+
 void main() {
-    vec4 color = texture(Sampler0, texCoord0) * vertexColor * ColorModulator;
+    ChromaMaterial chromaMaterial = chromaSampleMaterial(Sampler0, texCoord0, texture(Sampler0, texCoord0), chromaMaterialPhase);
+    vec4 color = chromaMaterial.color * vertexColor * ColorModulator;
     if (color.a < 0.1) {
         discard;
     }
     #ifdef OIT_ALPHA_ONLY
     executeAlphaOnlyPhase(gl_FragCoord.z, color.a);
+
     #if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK && defined(OIT_DEPTH_BOUNDS)
     // Only the final OIT composite consumes this device-depth channel. Keep
     // linear range, opaque cutoff, visibility tests and color accumulation native.
@@ -42,6 +48,7 @@ void main() {
     #endif
     #else
     fragColor = calculateFinalColor(color);
+
     #if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK && !defined(OIT)
     // With Improved Transparency ON, this is the unblended opaque particle
     // pass: alpha is metadata, while native RGB and depth stay untouched.

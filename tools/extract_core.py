@@ -1,8 +1,7 @@
 """Rebuild Chroma core hooks from exact Minecraft 26.3 vanilla shaders.
 
-Generated files retain GLSL 330 and vanilla branches. This writes item/entity
-hooks, editor/screen-overlay guards and the final OIT depth mask; no terrain
-or post shaders change.
+Generated files retain GLSL 330 and vanilla branches. Material hooks decode
+texture normal maps before native cutout/lighting, leaving post shaders intact.
 """
 from argparse import ArgumentParser
 from pathlib import Path
@@ -16,7 +15,9 @@ layout(location = 10) {direction} vec4 chromaEye;
 layout(location = 11) flat {direction} vec4 chromaColor;
 layout(location = 12) flat {direction} int chromaShape;
 layout(location = 13) flat {direction} vec3 chromaFacing;
-layout(location = 14) flat {direction} int chromaSlot;
+layout(location = 14) flat {direction} ivec3 chromaSlotPhase;
+#define chromaSlot chromaSlotPhase.x
+#define chromaMaterialPhase chromaSlotPhase.yz
 """
 
 VERTEX_HELPER = """
@@ -195,9 +196,87 @@ ENTITY_CASTER_BRANCH = """
     // Preserve native cutout, RGB, depth and all marker packets above. Mode 0/2
     // excludes this entity-shader group from persistent caster acquisition;
     // nonzero metadata still lets these surfaces receive Chroma lighting.
-    if (fragColor.a >= 254.5 / 255.0) fragColor.a = 1.0 / 255.0;
+    fragColor.a = 1.0 / 255.0;
     #endif
 """
+
+
+MATERIAL_INCLUDE = '#include <chroma:normal_material.glsl>\n'
+MATERIAL_BRANCH = """
+    #if !defined(OIT)
+    // The opaque framebuffer alpha carries only a material normal. RGB, depth,
+    // vanilla lighting and cutout coverage have already been resolved above.
+    // Improved Transparency routes blended world draws through OIT. Native
+    // cutout alpha after the discard is coverage, not an additional data code.
+    if (ProjMat[2][3] != 0.0)
+        fragColor.a = chromaMaterial.mapped ? chromaMaterialAlpha(chromaMaterial,
+            chromaMaterialEye, texCoord0, transpose(mat3(ModelViewMat))) : 1.0;
+    #endif
+"""
+
+
+def transform_material(shader: str, stage: str, *, terrain: bool = False,
+                       block: bool = False, particle: bool = False,
+                       overlay: bool = False, entity_caster: bool = False) -> str:
+    """Decode texture data in every atlas consumer; only world solids emit it."""
+    location = 5 if terrain else 4 if block else 15
+    phase_location = 6 if terrain else 5 if block else 4 if particle else 2
+    packed_phase = not (terrain or block or particle or overlay)
+    if stage == 'vsh':
+        varying = '' if particle or overlay else f'layout(location = {location}) out vec3 chromaMaterialEye;\n'
+        if not packed_phase:
+            varying += f'layout(location = {phase_location}) flat out ivec2 chromaMaterialPhase;\n'
+        if 'uniform sampler2D Sampler0;' not in shader:
+            varying += 'uniform sampler2D Sampler0;\n'
+        shader = shader.replace('void main() {', varying + '\nvoid main() {', 1)
+        position = 'pos' if terrain or block else 'Position'
+        anchor = f'    gl_Position = ProjMat * ModelViewMat * vec4({position}, 1.0);\n'
+        assert shader.count(anchor) == 1
+        branch = '' if particle or overlay else f'    chromaMaterialEye = (ModelViewMat * vec4({position}, 1.0)).xyz;\n'
+        branch += '''    // Atlas mip 0/1 padding can shift the sprite off the 4x4 grid.
+    // Native pixel-aligned model UVs retain that phase at every vertex.
+    chromaMaterialPhase = textureSize(Sampler0, 2).x > 0 ? ivec2(0) :
+        (ivec2(round(UV0 * vec2(textureSize(Sampler0, 0)))) & ivec2(3));
+'''
+        return shader.replace(anchor, anchor + branch)
+
+    anchor = 'uniform sampler2D Sampler0;\n'
+    assert shader.count(anchor) == 1
+    shader = shader.replace(anchor, MATERIAL_INCLUDE + '\n' + anchor)
+    if not packed_phase:
+        shader = shader.replace('void main() {',
+            f'layout(location = {phase_location}) flat in ivec2 chromaMaterialPhase;\n\nvoid main() {{', 1)
+    if not (particle or overlay):
+        varying = f'layout(location = {location}) in vec3 chromaMaterialEye;\n'
+        shader = shader.replace('void main() {', varying + '\nvoid main() {', 1)
+        # Item/entity already import projection for their marker transport.
+        if terrain or block:
+            shader = shader.replace(MATERIAL_INCLUDE,
+                '#include <minecraft:projection.glsl>\n' + MATERIAL_INCLUDE)
+    if terrain:
+        native = '(UseRgss == 1 ? sampleRGSS(Sampler0, texCoord0, 1.0f / TextureSize) : sampleNearest(Sampler0, texCoord0, 1.0f / TextureSize))'
+        modulation = ' * vertexColor'
+    else:
+        native = 'texture(Sampler0, texCoord0)'
+        modulation = (' * vertexColor' if overlay else
+            ' * vertexColor * ColorModulator' if block or particle else '')
+    anchor = f'    vec4 color = {native}{modulation};\n'
+    assert shader.count(anchor) == 1
+    sample_material = (f'chromaSampleTerrainMaterial(Sampler0, texCoord0, {native}, chromaMaterialPhase, UseRgss == 1)'
+                       if terrain else f'chromaSampleMaterial(Sampler0, texCoord0, {native}, chromaMaterialPhase)')
+    shader = shader.replace(anchor,
+        f'    ChromaMaterial chromaMaterial = {sample_material};\n'
+        f'    vec4 color = chromaMaterial.color{modulation};\n')
+    if not (particle or overlay):
+        branch = MATERIAL_BRANCH
+        if entity_caster:
+            # Existing entity alpha 1 must keep priority in disabled/contact modes.
+            branch = ('\n    #if CHROMA_STATIC_WORLD || CHROMA_ENTITY_SHADOWS == 1 || !CHROMA_TRANSPARENT_DEPTH_MASK\n'
+                      + branch + '    #endif\n')
+        anchor = '    fragColor = calculateFinalColor(color);\n'
+        assert shader.count(anchor) == 1
+        shader = shader.replace(anchor, anchor + branch)
+    return shader
 
 
 def transform(vanilla: str, stage: str, *, entity_caster: bool = False) -> str:
@@ -209,7 +288,8 @@ def transform(vanilla: str, stage: str, *, entity_caster: bool = False) -> str:
         before, after = shader.split('void main() {', 1)
         shader = before + 'uniform sampler2D Sampler0;\n' + VARYINGS.format(direction='out') + VERTEX_HELPER + '\nvoid main() {' + after
         end = shader.rfind('}')
-        return shader[:end] + VERTEX_BRANCH + shader[end:]
+        shader = shader[:end] + VERTEX_BRANCH + shader[end:]
+        return transform_material(shader, stage)
 
     anchor = '#ifdef GLINT\n#include <minecraft:globals.glsl>\n#endif'
     assert vanilla.count(anchor) == 1
@@ -221,7 +301,8 @@ def transform(vanilla: str, stage: str, *, entity_caster: bool = False) -> str:
         assert shader.count(anchor) == 1
         shader = shader.replace(anchor, anchor + ENTITY_CASTER_BRANCH)
     before, after = shader.split('void main() {', 1)
-    return before + VARYINGS.format(direction='in') + FRAGMENT_HELPER + '\nvoid main() {\n' + FRAGMENT_BRANCH + after
+    shader = before + VARYINGS.format(direction='in') + FRAGMENT_HELPER + '\nvoid main() {\n' + FRAGMENT_BRANCH + after
+    return transform_material(shader, stage, entity_caster=entity_caster)
 
 
 def transform_position_color(vanilla: str, stage: str = 'vsh') -> str:
@@ -262,7 +343,8 @@ def transform_screen_overlay(vanilla: str) -> str:
     shader = vanilla.replace(anchor, anchor + '\n' + POSITION_COLOR_FRAGMENT_INCLUDES)
     anchor = 'void main() {'
     assert shader.count(anchor) == 1
-    return shader.replace(anchor, anchor + SCREEN_OVERLAY_FRAGMENT_BRANCH)
+    shader = shader.replace(anchor, anchor + SCREEN_OVERLAY_FRAGMENT_BRANCH)
+    return transform_material(shader, 'fsh', overlay=True)
 
 
 def write_screen_overlay(jar: ZipFile, output: Path) -> None:
@@ -271,6 +353,9 @@ def write_screen_overlay(jar: ZipFile, output: Path) -> None:
     destination = output / rel
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(transform_screen_overlay(vanilla), encoding='utf-8', newline='\n')
+    rel = 'assets/minecraft/shaders/core/position_tex_color.vsh'
+    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+    (output / rel).write_text(transform_material(vanilla, 'vsh', overlay=True), encoding='utf-8', newline='\n')
 
 
 TRANSPARENT_DEPTH_BRANCH = """#if !CHROMA_STATIC_WORLD && CHROMA_TRANSPARENT_DEPTH_MASK
@@ -302,6 +387,55 @@ def write_oit_composite(jar: ZipFile, output: Path) -> None:
     destination.write_text(transform_oit_composite(vanilla), encoding='utf-8', newline='\n')
 
 
+PARTICLE_OIT_BRANCH = """
+    #if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK && defined(OIT_DEPTH_BOUNDS)
+    // Only the final OIT composite consumes this device-depth channel. Keep
+    // linear range, opaque cutoff, visibility tests and color accumulation native.
+    // Covered particle pixels become unknown to Dynamic after world rendering.
+    fragColor.b = 1.0;
+    #endif
+"""
+
+PARTICLE_OPAQUE_BRANCH = """
+    #if !CHROMA_STATIC_WORLD && CHROMA_PARTICLE_DEPTH_MASK && !defined(OIT)
+    // With Improved Transparency ON, this is the unblended opaque particle
+    // pass: alpha is metadata, while native RGB and depth stay untouched.
+    // Classic translucent particles share this shader, so disable the setting
+    // before turning Improved Transparency OFF; their alpha controls blending.
+    fragColor.a = 0.0;
+    #endif
+"""
+
+
+def transform_particle(vanilla: str) -> str:
+    shader = vanilla.replace('#include <minecraft:oit.glsl>\n',
+        '#include <minecraft:oit.glsl>\n#include <chroma:shadow_config.glsl>\n')
+    anchor = '    executeAlphaOnlyPhase(gl_FragCoord.z, color.a);\n'
+    assert shader.count(anchor) == 1
+    shader = shader.replace(anchor, anchor + PARTICLE_OIT_BRANCH)
+    anchor = '    fragColor = calculateFinalColor(color);\n'
+    assert shader.count(anchor) == 1
+    shader = shader.replace(anchor, anchor + PARTICLE_OPAQUE_BRANCH)
+    return transform_material(shader, 'fsh', particle=True)
+
+
+def write_material_cores(jar: ZipFile, output: Path) -> None:
+    for name in ('terrain', 'block'):
+        for stage in ('vsh', 'fsh'):
+            rel = f'assets/minecraft/shaders/core/{name}.{stage}'
+            vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+            destination = output / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(transform_material(vanilla, stage,
+                terrain=name == 'terrain', block=name == 'block'), encoding='utf-8', newline='\n')
+    rel = 'assets/minecraft/shaders/core/particle.fsh'
+    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+    (output / rel).write_text(transform_particle(vanilla), encoding='utf-8', newline='\n')
+    rel = 'assets/minecraft/shaders/core/particle.vsh'
+    vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+    (output / rel).write_text(transform_material(vanilla, 'vsh', particle=True), encoding='utf-8', newline='\n')
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument('--client-jar', type=Path, default=Path(os.environ['APPDATA']) / 'PrismLauncher/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar')
@@ -330,6 +464,8 @@ def main():
         print('assets/minecraft/shaders/core/position_tex_color.fsh')
         write_oit_composite(jar, args.output)
         print('assets/minecraft/shaders/core/oit_composite.fsh')
+        write_material_cores(jar, args.output)
+        print('assets/minecraft/shaders/core/{terrain,block,particle}: material hooks')
 
 
 if __name__ == '__main__':

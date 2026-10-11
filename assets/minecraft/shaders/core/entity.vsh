@@ -58,7 +58,9 @@ layout(location = 10) out vec4 chromaEye;
 layout(location = 11) flat out vec4 chromaColor;
 layout(location = 12) flat out int chromaShape;
 layout(location = 13) flat out vec3 chromaFacing;
-layout(location = 14) flat out int chromaSlot;
+layout(location = 14) flat out ivec3 chromaSlotPhase;
+#define chromaSlot chromaSlotPhase.x
+#define chromaMaterialPhase chromaSlotPhase.yz
 
 // Validate the complete marker code. Ordinary blue textures can share R/G,
 // especially at an atlas corner whose padding repeats one texel five times.
@@ -78,8 +80,15 @@ bool chromaMatchKey(vec2 uv, vec2 tx) {
            chromaMatchSample(textureLod(Sampler0, uv - vec2(0.0, tx.y), 0.0), identity);
 }
 
+layout(location = 15) out vec3 chromaMaterialEye;
+
 void main() {
     gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
+    chromaMaterialEye = (ModelViewMat * vec4(Position, 1.0)).xyz;
+    // Atlas mip 0/1 padding can shift the sprite off the 4x4 grid.
+    // Native pixel-aligned model UVs retain that phase at every vertex.
+    chromaMaterialPhase = textureSize(Sampler0, 2).x > 0 ? ivec2(0) :
+        (ivec2(round(UV0 * vec2(textureSize(Sampler0, 0)))) & ivec2(3));
 
     sphericalVertexDistance = fog_spherical_distance(Position);
     cylindricalVertexDistance = fog_cylindrical_distance(Position);

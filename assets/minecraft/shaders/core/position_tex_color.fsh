@@ -14,12 +14,16 @@ layout(std140) uniform DynamicTransforms {
     vec3 ModelOffset;
 };
 
+#include <chroma:normal_material.glsl>
+
 uniform sampler2D Sampler0;
 
 layout(location = 0) in vec2 texCoord0;
 layout(location = 1) in vec4 vertexColor;
 
 layout(location = 0) out vec4 fragColor;
+
+layout(location = 2) flat in ivec2 chromaMaterialPhase;
 
 void main() {
     // Vanilla block/water/fire screen effects use this shared shader after
@@ -33,7 +37,8 @@ void main() {
             chromaRawAddressAtPixel(pixel, size) >= 0) discard;
     }
 
-    vec4 color = texture(Sampler0, texCoord0) * vertexColor;
+    ChromaMaterial chromaMaterial = chromaSampleMaterial(Sampler0, texCoord0, texture(Sampler0, texCoord0), chromaMaterialPhase);
+    vec4 color = chromaMaterial.color * vertexColor;
     if (color.a == 0.0) {
         discard;
     }

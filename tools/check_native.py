@@ -47,7 +47,8 @@ def main():
     for artifact in ('lwjgl', 'lwjgl-natives-windows', 'lwjgl-opengl', 'lwjgl-opengl-natives-windows', 'lwjgl-glfw', 'lwjgl-glfw-natives-windows'):
         gpu_libraries.append(prism / 'libraries/org/lwjgl' / artifact / '3.4.1' / (artifact + '-3.4.1.jar'))
     gpu_cp = ';'.join(map(str, gpu_libraries))
-    subprocess.run([str(java / 'javac.exe'), '-encoding', 'UTF-8', '-cp', gpu_cp, '-d', str(classes), str(ROOT / 'tools/CheckDriver.java')], check=True)
+    subprocess.run([str(java / 'javac.exe'), '-encoding', 'UTF-8', '-cp', gpu_cp, '-d', str(classes),
+                    str(ROOT / 'tools/CheckDriver.java'), str(ROOT / 'tools/CheckNormalMaterials.java')], check=True)
     archive = args.pack.resolve() if args.pack else report / 'candidate.zip'
     if not args.pack:
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -76,10 +77,11 @@ def main():
         ('ValidatePack', [archive, jar]),
         ('ReproduceClientShaders', [archive, jar, stages]),
         ('CheckDriver', driver_args),
+        ('CheckNormalMaterials', [ROOT]),
         ('CheckExamples', [ROOT, report / 'examples-validation.json']),
     ):
         argfile = report / (name + '.args')
-        run_cp = gpu_cp if name == 'CheckDriver' else cp
+        run_cp = gpu_cp if name in ('CheckDriver', 'CheckNormalMaterials') else cp
         argfile.write_text('--enable-native-access=ALL-UNNAMED\n-Xmx2G\n-Dorg.lwjgl.system.stackSize=1024\n-cp\n"' + run_cp.replace('\\', '/') + '"\n' + name + '\n', encoding='utf-8')
         result = subprocess.run([str(java / 'java.exe'), '@' + str(argfile), *map(str, parameters)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         log = result.stdout.decode('utf-8', errors='replace')

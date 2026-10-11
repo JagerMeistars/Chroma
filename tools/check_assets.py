@@ -75,6 +75,60 @@ def main():
     mcfiles={p.relative_to(root/'assets/minecraft').as_posix() for p in (root/'assets/minecraft').rglob('*') if p.is_file()}
     allowed={'post_effect/end_of_frame.json','atlases/items.json'}|{f'shaders/core/{name}.{stage}' for name in ('item','entity','position_color') for stage in ('vsh','fsh')}
     if shadow_build: allowed.update(('shaders/core/integrate_depth.fsh', 'shaders/core/position_tex_color.fsh', 'shaders/core/particle.fsh', 'shaders/core/oit_composite.fsh', 'shaders/core/rendertype_lines.vsh', 'shaders/core/rendertype_lines.fsh'))
+    if (root/'assets/chroma/shaders/include/normal_config.glsl').is_file():
+        allowed.update(f'shaders/core/{name}.{stage}' for name in ('terrain','block') for stage in ('vsh','fsh'))
+        allowed.update(('shaders/core/particle.vsh','shaders/core/position_tex_color.vsh'))
+        manifest_path=root/'assets/chroma/normal_maps.json'
+        if not manifest_path.is_file():
+            errors.append('Missing generated normal-map manifest')
+        else:
+            from normal_maps import is_vanilla_material
+            manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+            materials=manifest.get('materials',{});skipped=manifest.get('skipped',{})
+            native_textures={name for name in vanilla if is_vanilla_material(name)}
+            if manifest.get('format')!='chroma-normal-alpha-4x4-v1':errors.append('Unknown normal-map texture format')
+            if set(materials)&set(skipped) or set(materials)|set(skipped)!=native_textures:
+                errors.append('Normal-map manifest must list every supported vanilla material exactly once')
+            for name in (set(materials)|set(skipped)) & native_textures:
+                allowed.add(name.removeprefix('assets/minecraft/'))
+                if name in materials:
+                    allowed.add((name+'.mcmeta').removeprefix('assets/minecraft/'))
+                    if materials[name]!=hashlib.sha256(jar.read(name)).hexdigest():
+                        errors.append(f'Normal-map source checksum differs from vanilla: {name}')
+                else:
+                    if name+'.mcmeta' in vanilla:allowed.add((name+'.mcmeta').removeprefix('assets/minecraft/'))
+                    if (root/name).is_file() and (root/name).read_bytes()!=jar.read(name):
+                        errors.append(f'Unconverted translucent texture changed: {name}')
+            clones=set()
+            for identifier in manifest.get('generated_items_original_textures',[]):
+                if not isinstance(identifier,str) or not identifier.startswith('minecraft:'):
+                    errors.append(f'Unexpected protected item model: {identifier}');continue
+                name=f'assets/minecraft/models/{identifier.split(":",1)[1]}.json'
+                if name not in vanilla or not (root/name).is_file():
+                    errors.append(f'Missing native/protected item model: {name}');continue
+                original=json.loads(jar.read(name));changed=json.loads((root/name).read_text(encoding='utf-8'))
+                allowed.add(name.removeprefix('assets/minecraft/'))
+                expected={**original,'textures':dict(original.get('textures',{}))}
+                for layer,texture in changed.get('textures',{}).items():
+                    if texture==original.get('textures',{}).get(layer):continue
+                    prefix='chroma:item/chroma_normal_original/minecraft/'
+                    if layer not in ('layer0','layer1','layer2','layer3','layer4') or not isinstance(texture,str) or not texture.startswith(prefix):
+                        errors.append(f'Unexpected protected item texture: {name}:{layer}');continue
+                    source_name='assets/minecraft/textures/'+texture.removeprefix(prefix)+'.png'
+                    clone_name='assets/chroma/textures/'+texture.split(':',1)[1]+'.png'
+                    if source_name not in materials:
+                        errors.append(f'Protected item texture is not an encoded material: {source_name}');continue
+                    expected['textures'][layer]=texture
+                    for suffix in ('','.mcmeta'):
+                        if source_name+suffix not in vanilla:continue
+                        clones.add(clone_name+suffix)
+                        clone_path=root/(clone_name+suffix)
+                        if not clone_path.is_file() or clone_path.read_bytes()!=jar.read(source_name+suffix):
+                            errors.append(f'Original item texture was not preserved: {clone_name+suffix}')
+                if changed!=expected:errors.append(f'Protected item model changes geometry: {name}')
+            clone_root=root/'assets/chroma/textures/item/chroma_normal_original'
+            actual_clones={p.relative_to(root).as_posix() for p in clone_root.rglob('*') if p.is_file()} if clone_root.exists() else set()
+            if actual_clones!=clones:errors.append(f'Unexpected original item texture clones: {actual_clones^clones}')
     if mcfiles!=allowed:errors.append(f'Unexpected Minecraft overrides: {mcfiles^allowed}')
     chain=json.loads((root/'assets/minecraft/post_effect/end_of_frame.json').read_text(encoding='utf-8'))
     targets=chain['targets'];available={'minecraft:main'};dimensions={}

@@ -27,6 +27,7 @@ def main():
                     (ROOT/'assets/chroma/shaders/include/shadow_config.glsl').exists()),encoding='utf-8',newline='\n')
         extract_core.write_position_color(jar,args.output)
         extract_core.write_screen_overlay(jar,args.output)
+        extract_core.write_material_cores(jar,args.output)
     for name,source in TRANSPORT_INCLUDES.items():
         target=args.output/f'assets/chroma/shaders/include/{name}';target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(source,encoding='utf-8',newline='\n')

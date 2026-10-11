@@ -8,6 +8,8 @@
 #include <minecraft:dynamictransforms.glsl>
 #include <minecraft:oit.glsl>
 
+#include <chroma:normal_material.glsl>
+
 uniform sampler2D Sampler0;
 
 #ifdef GLINT
@@ -62,7 +64,9 @@ layout(location = 10) in vec4 chromaEye;
 layout(location = 11) flat in vec4 chromaColor;
 layout(location = 12) flat in int chromaShape;
 layout(location = 13) flat in vec3 chromaFacing;
-layout(location = 14) flat in int chromaSlot;
+layout(location = 14) flat in ivec3 chromaSlotPhase;
+#define chromaSlot chromaSlotPhase.x
+#define chromaMaterialPhase chromaSlotPhase.yz
 
 // Every marker writes the same current-camera header at the near plane.
 // Scan the whole packet surface: draw order cannot select a source-address bound.
@@ -120,6 +124,8 @@ vec4 chromaMarkerColor() {
     return chromaAutoEncode(words[local.x + local.y * 4]);
 }
 
+layout(location = 15) in vec3 chromaMaterialEye;
+
 void main() {
 
     if (chromaMarker > 0.5) {
@@ -136,7 +142,8 @@ void main() {
     // First-person items can clear scene depth before end_of_frame reads data.
     if (chromaReservedPixel()) discard;
 
-    vec4 color = texture(Sampler0, texCoord0);
+    ChromaMaterial chromaMaterial = chromaSampleMaterial(Sampler0, texCoord0, texture(Sampler0, texCoord0), chromaMaterialPhase);
+    vec4 color = chromaMaterial.color;
     #ifdef ALPHA_CUTOUT
     if (color.a < ALPHA_CUTOUT) {
         discard;
@@ -153,5 +160,15 @@ void main() {
     executeAlphaOnlyPhase(gl_FragCoord.z, color.a);
     #else
     fragColor = calculateFinalColor(color);
+
+    #if !defined(OIT)
+    // The opaque framebuffer alpha carries only a material normal. RGB, depth,
+    // vanilla lighting and cutout coverage have already been resolved above.
+    // Improved Transparency routes blended world draws through OIT. Native
+    // cutout alpha after the discard is coverage, not an additional data code.
+    if (ProjMat[2][3] != 0.0)
+        fragColor.a = chromaMaterial.mapped ? chromaMaterialAlpha(chromaMaterial,
+            chromaMaterialEye, texCoord0, transpose(mat3(ModelViewMat))) : 1.0;
+    #endif
     #endif
 }

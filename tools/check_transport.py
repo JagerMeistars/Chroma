@@ -75,8 +75,15 @@ def main():
         vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
         shader = (args.root / rel).read_text(encoding='utf-8')
         assert shader == extract_core.transform_screen_overlay(vanilla), rel
-        assert shader.replace(extract_core.SCREEN_OVERLAY_FRAGMENT_BRANCH, '').replace(
-            '\n' + extract_core.POSITION_COLOR_FRAGMENT_INCLUDES, '') == vanilla
+        stripped = shader.replace(extract_core.SCREEN_OVERLAY_FRAGMENT_BRANCH, '').replace(
+            '\n' + extract_core.POSITION_COLOR_FRAGMENT_INCLUDES, '')
+        stripped = stripped.replace(extract_core.MATERIAL_INCLUDE + '\n', '')
+        stripped = stripped.replace('layout(location = 2) flat in ivec2 chromaMaterialPhase;\n\n', '')
+        stripped = stripped.replace(
+            '    ChromaMaterial chromaMaterial = chromaSampleMaterial(Sampler0, texCoord0, texture(Sampler0, texCoord0), chromaMaterialPhase);\n'
+            '    vec4 color = chromaMaterial.color * vertexColor;\n',
+            '    vec4 color = texture(Sampler0, texCoord0) * vertexColor;\n')
+        assert stripped == vanilla
         # The only injected discard is nested under the perspective condition;
         # orthographic GUI projection has ProjMat[2][3] == 0 and bypasses it.
         branch = extract_core.SCREEN_OVERLAY_FRAGMENT_BRANCH
@@ -85,7 +92,22 @@ def main():
         assert 'chromaAutoHeaderPixel(pixel, size)' in branch
         assert 'chromaRawAddressAtPixel(pixel, size) >= 0' in branch
         checked.append(rel)
-    assert not (args.root / 'assets/minecraft/shaders/core/terrain.fsh').exists()
+        for stem in ('terrain', 'block'):
+            for stage in ('vsh', 'fsh'):
+                rel = f'assets/minecraft/shaders/core/{stem}.{stage}'
+                vanilla = jar.read(rel).decode('utf-8').replace('\r\n', '\n')
+                shader = (args.root / rel).read_text(encoding='utf-8')
+                assert shader == extract_core.transform_material(vanilla, stage,
+                    terrain=stem == 'terrain', block=stem == 'block'), rel
+                assert 'chromaMarker' not in shader and 'chromaAuto' not in shader, rel
+                assert 'gl_FragDepth' not in shader, rel
+                if stage == 'vsh':
+                    assert 'gl_Position = ProjMat * ModelViewMat * vec4(pos, 1.0);' in shader, rel
+                else:
+                    assert 'fragColor = calculateFinalColor(color);' in shader, rel
+                    sampler = 'chromaSampleTerrainMaterial(' if stem == 'terrain' else 'chromaSampleMaterial('
+                    assert shader.index(sampler) < shader.index('if (color.a < ALPHA_CUTOUT)'), rel
+                checked.append(rel)
 
     # The full scan must include the final packet at every supported resolution,
     # with neither its pixels nor any other packet touching the header row.
@@ -98,7 +120,7 @@ def main():
             y = height - 4 - 3 * (address // (width // 4))
             assert 0 <= x and x + 3 < width and 0 <= y and y + 1 < height - 1
     result = {'generated_shaders_checked': checked,
-              'terrain_override_required': False,
+              'terrain_override_required': 'material normal maps only; no source transport',
               'header_depth': 1.0,
               'header_bound': 'capacity - 1, identical for every writer',
               'resolutions': resolutions,

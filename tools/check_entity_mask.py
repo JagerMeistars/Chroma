@@ -48,20 +48,21 @@ def main():
         shader = (ROOT/'assets/minecraft/shaders/core/entity.fsh').read_text()
         assert shader == extract_core.transform(vanilla, 'fsh', entity_caster=True)
         plain = extract_core.transform(vanilla, 'fsh')
-        # Exact disabled-path parity: the only extra statements are the guarded
-        # alpha write and config include; native cutout/fog/RGB are untouched.
-        assert shader.replace(extract_core.ENTITY_CASTER_BRANCH, '').replace(
-            '#include <chroma:shadow_config.glsl>\n', '') == plain
+        # Only alpha ownership differs: entity tags override material normals.
+        entity_material = ('\n    #if CHROMA_STATIC_WORLD || CHROMA_ENTITY_SHADOWS == 1 || !CHROMA_TRANSPARENT_DEPTH_MASK\n'
+                           + extract_core.MATERIAL_BRANCH + '    #endif\n')
+        assert shader.replace(entity_material, extract_core.MATERIAL_BRANCH).replace(
+            extract_core.ENTITY_CASTER_BRANCH, '').replace('#include <chroma:shadow_config.glsl>\n', '') == plain
         assert 'shadow_config.glsl' not in plain and 'CHROMA_ENTITY_SHADOWS' not in plain
         item = jar.read('assets/minecraft/shaders/core/item.fsh').decode().replace('\r\n', '\n')
         assert (ROOT/'assets/minecraft/shaders/core/item.fsh').read_text() == extract_core.transform(item, 'fsh')
         oit = jar.read('assets/minecraft/shaders/include/oit.glsl').decode()
         assert '#ifdef OIT' in oit
     assert ACTIVE+' && !defined(OIT)' in extract_core.ENTITY_CASTER_BRANCH
-    assert 'fragColor.a >= 254.5 / 255.0' in extract_core.ENTITY_CASTER_BRANCH
+    assert 'fragColor.a >=' not in extract_core.ENTITY_CASTER_BRANCH
     assert 'fragColor.a = 1.0 / 255.0' in extract_core.ENTITY_CASTER_BRANCH
     assert extract_core.FRAGMENT_BRANCH in shader
-    assert shader.index(extract_core.FRAGMENT_BRANCH) < shader.index('vec4 color = texture(Sampler0, texCoord0);')
+    assert shader.index(extract_core.FRAGMENT_BRANCH) < shader.index('ChromaMaterial chromaMaterial = chromaSampleMaterial(')
     assert shader.index('if (color.a < ALPHA_CUTOUT)') < shader.index(extract_core.ENTITY_CASTER_BRANCH)
     assert shader.index('fragColor = calculateFinalColor(color);') < shader.index(extract_core.ENTITY_CASTER_BRANCH)
 
@@ -83,7 +84,7 @@ def main():
     assert 'if (!projectPixel(eye, cameraProj, size, p)) return -1;' in update
 
     # Native visibility/cutout precedes the metadata write. In supported
-    # unblended draws every RGB/depth value is unchanged; only byte255 becomes1.
+    # unblended draws every RGB/depth value is unchanged; surviving alpha is tag1.
     checked = 0
     rgb = (.13, .46, .79)
     for static in (False, True):
@@ -97,10 +98,10 @@ def main():
                                 # Discarded/occluded geometry cannot change the wall.
                                 continue
                             native_pixel = (*rgb, alpha)
-                            marked = (*rgb, 1/255 if active and byte(alpha) == 255 else alpha)
+                            marked = (*rgb, 1/255 if active else alpha)
                             assert marked[:3] == native_pixel[:3]
                             if not active: assert marked == native_pixel
-                            assert (byte(marked[3]) == 1) == (active and byte(alpha) == 255)
+                            assert (byte(marked[3]) == 1) == active
                             assert marked[3] > .5/255, 'Entity receivers must survive the particle alpha0 guard'
                             checked += 1
     assert byte(0.) == 0 and byte(1/255) == 1 and byte(2/255) == 2

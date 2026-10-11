@@ -15,6 +15,8 @@ def pack_files():
     # Player-facing files only; development reports remain in the repository.
     files.extend(ROOT / 'docs' / name for name in (
         'README.en.md', 'README.ru.md', 'examples.mcfunction', 'examples-128.mcfunction'))
+    files.append(ROOT / 'tools' / 'normal_maps.py')
+    files.append(ROOT / 'tools' / 'normal_item_models.json')
     return sorted(files)
 
 

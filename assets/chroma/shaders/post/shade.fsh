@@ -31,6 +31,7 @@
 #include <chroma:lighting.glsl>
 #include <chroma:auto_read.glsl>
 #include <chroma:shadow_filter.glsl>
+#include <chroma:normal_encoding.glsl>
 
 uniform sampler2D InSampler;
 uniform sampler2D InDepthSampler;
@@ -150,6 +151,9 @@ void main() {
     float shadowDebug = 1.0;
     vec3 worldReceiver = cameraInvRot * fragPos;
     vec3 worldNormal = cameraInvRot * normal;
+    vec3 mappedWorldNormal = chromaDecodeMaterialNormal(texelFetch(InSampler,
+        ivec2(suv * vec2(frameSize)), 0).a, worldNormal);
+    vec3 lightingNormal = transpose(cameraInvRot) * mappedWorldNormal;
     worldReceiver = chromaShadowReceiver(worldReceiver, worldNormal);
     vec3 lightReceiver = fragPos;
 #if CHROMA_SHADOW_PIXELATE
@@ -182,7 +186,10 @@ void main() {
             float dist = length(toL);
             if (dist <= lRad) {
                 vec3 L = toL / max(dist, 1e-4);
-                float diff = max(dot(normal, L), 0.0);
+                float diff = max(dot(lightingNormal, L), 0.0);
+                // Relief cannot turn a physically back-facing block face into
+                // a light receiver. Shadow tests always keep the geometric normal.
+                if (dot(normal, L) <= 0.0) diff = 0.0;
                 float rx = clamp(dist / lRad, 0.0, 1.0);
                 float fall = 1.0 - smoothstep(FALLOFF_CORE, 1.0, rx);
                 if (lShape >= 1 && lShape <= 3) {
