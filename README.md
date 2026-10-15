@@ -2,11 +2,11 @@
 
 ## English
 
-Coloured light, world shadows and normal maps for **Minecraft Java 26.3**. A vanilla resource pack with up to 128 lights in five shapes.
+Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource pack with up to 128 lights in five shapes.
 
 ### Start
 
-1. Download `Chroma-26.3.zip` from [Releases](https://github.com/JagerMeistars/Chroma/releases/latest).
+1. Download `Chroma-26.3.zip`: [stable](https://github.com/JagerMeistars/Chroma/releases/latest) or [experimental with normal maps](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
 2. Put the ZIP in `minecraft/resourcepacks`, enable it, and turn on **Improved Transparency**.
 3. Follow the [English guide](docs/README.en.md) to spawn and configure lights.
 
@@ -17,11 +17,11 @@ Coloured light, world shadows and normal maps for **Minecraft Java 26.3**. A van
 
 ## Русский
 
-Цветной свет, мировые тени и карты нормалей для **Minecraft Java 26.3**. Ресурспак без модов: до 128 источников пяти форм.
+Цветной свет и мировые тени для **Minecraft Java 26.3**. Ресурспак без модов: до 128 источников пяти форм.
 
 ### Начать
 
-1. Скачай `Chroma-26.3.zip` в [релизах](https://github.com/JagerMeistars/Chroma/releases/latest).
+1. Скачай `Chroma-26.3.zip`: [стабильную версию](https://github.com/JagerMeistars/Chroma/releases/latest) или [экспериментальную с картами нормалей](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
 2. Положи ZIP в `minecraft/resourcepacks`, включи его и **Improved Transparency**.
 3. Инструкция по [созданию и настройке источников](docs/README.ru.md).
 

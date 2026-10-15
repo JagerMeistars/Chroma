@@ -1,10 +1,10 @@
 # Chroma — player guide
 
-Coloured lights, world shadows and normal maps for **Minecraft Java 26.3**. No mod is required. [Русский](README.ru.md).
+Coloured lights and world shadows for **Minecraft Java 26.3**. No mod is required. [Русский](README.ru.md).
 
 ## Install
 
-1. Download `Chroma-26.3.zip` from [Releases](https://github.com/JagerMeistars/Chroma/releases/latest).
+1. Download `Chroma-26.3.zip`: [stable](https://github.com/JagerMeistars/Chroma/releases/latest) or [experimental with normal maps](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
 2. Put the ZIP in `minecraft/resourcepacks`, then enable **only one Chroma pack** at highest priority in **Options → Resource Packs**. Every player who wants to see the effect must enable it.
 3. Enable **Improved Transparency**. After replacing the pack, press **F3+T**.
 
@@ -82,7 +82,7 @@ For more FPS, try `CHROMA_SHADOW_QUALITY 1`; to disable shadow calculations, set
 
 Chroma's extra fog is off by default (`FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`). Disable hemisphere flicker with `CHROMA_FLICKER_AMOUNT 0.0` in `assets/chroma/shaders/include/flicker.glsl`.
 
-## Normal maps
+## Normal maps (experimental)
 
 Normal maps give textures relief under **Chroma lamps**. The pack includes maps generated from the colours of **1329 opaque and cutout block and block-entity textures**. **110 textures with partial transparency**, including glass, and downloaded player-head skins keep their previous appearance. Relief does not change block geometry or cast extra shadows.
 
