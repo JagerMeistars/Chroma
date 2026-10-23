@@ -33,6 +33,8 @@ void main() {
         fragColor = chromaVoxEncode(0u);
         return;
     }
+    // Depth and payload must refresh together, after this frame's voxel LOD.
+#if CHROMA_STATIC_WORLD || CHROMA_SHADOW_REFRESH_FRAMES != 1
     bool unchanged = true;
     for (int field = 0; field < 8; ++field) {
         uint current = chromaVoxDecode(texelFetch(CurrentShadowMetaSampler, ivec2(base + field, 0), 0));
@@ -43,12 +45,13 @@ void main() {
     // ponytail: observed-world geometry refreshes each source at least every
     // eight frames; moved/new sources bypass this bounded update delay.
     uint frame = chromaVoxDecode(texelFetch(VoxelMetaSampler, ivec2(4, 0), 0));
-    unchanged = unchanged && ((frame + uint(lamp)) & 7u) != 0u;
+    unchanged = unchanged && ((frame + uint(lamp)) % uint(CHROMA_SHADOW_REFRESH_FRAMES)) != 0u;
 #endif
     if (unchanged) {
         fragColor = texelFetch(PreviousShadowSampler, pixel, 0);
         return;
     }
+#endif
     vec2 oct = (vec2(pixel & ivec2(CHROMA_SHADOW_MAP_SIZE - 1)) + 0.5)
              / float(CHROMA_SHADOW_MAP_SIZE) * 2.0 - 1.0;
     vec3 direction = chromaShadowOctDecode(oct);

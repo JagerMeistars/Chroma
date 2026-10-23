@@ -22,7 +22,7 @@ Place the block, paste the summon below **without its leading `/`**, and activat
 /summon minecraft:item_display ~ ~2 ~ {Tags:["chroma.demo","chroma.demo.warm"],Rotation:[0f,0f],billboard:"fixed",item_display:"none",view_range:4f,width:0f,height:0f,item:{id:"minecraft:paper",count:1,components:{"minecraft:item_model":"chroma:marker","minecraft:custom_model_data":{colors:[0xFFBC4D]}}},transformation:{translation:[0f,0f,0f],left_rotation:[0f,0f,0f,1f],scale:[8f,0.3f,1f],right_rotation:[0f,0f,0f,1f]}}
 ```
 
-This creates an invisible warm lamp: colour `0xFFBC4D`, radius **8 blocks**, brightness **0.3**. Place it above a floor or beside a wall to see the light. A decorative lamp model is optional.
+This creates a warm light source with a visible halo: colour `0xFFBC4D`, radius **8 blocks**, brightness **0.3**. Place it above a floor or beside a wall to see the light. A decorative lamp model is optional.
 
 ## Five light types
 
@@ -66,32 +66,31 @@ Use `Rotation` to aim a spotlight. The hemisphere always points down.
 
 ## Global settings
 
-To edit settings, extract the pack into a folder in `resourcepacks`; `pack.mcmeta` and `assets` must be directly inside it. Enable that folder **instead of the ZIP**, edit the file, save, then press **F3+T**.
+In the **experimental version**, all settings are in **`assets/chroma/shaders/include/settings.glsl`**.
 
-Edit `assets/chroma/shaders/include/shadow_config.glsl`:
+Extract the pack into a folder in `resourcepacks`; `pack.mcmeta` and `assets` must be directly inside it. Enable that folder **instead of the ZIP**. Open `settings.glsl` in a text editor, change the value after the setting's name, save, then press **F3+T**.
 
 | Setting | Default and effect |
 | --- | --- |
-| `CHROMA_SHADOWS_ENABLED` | `1`: shadows on; `0`: shadows off, lights stay on and pass through walls |
-| `CHROMA_SHADOW_QUALITY` | `2`: normal (default); `1`: faster, coarser shadows and penumbrae |
-| `CHROMA_SHADOW_PIXELATE` | `1`: pixelated light/shadows; `0`: continuous sampling |
-| `CHROMA_SHADOW_PIXELS_PER_BLOCK` | `16`: subdivisions per block when pixelation is enabled |
-| `CHROMA_SOURCE_SIZE` | `0.35`: source radius; larger values produce softer shadows |
+| `CHROMA_SHADOWS_ENABLED` | `1`: shadows on; `0`: off (light passes through walls) |
+| `CHROMA_SHADOW_QUALITY` | `2`: normal; `1`: faster, coarser shadows |
+| `CHROMA_SOURCE_SIZE` | `0.35`: larger values soften shadow edges |
+| `CHROMA_SHADOW_PIXELATE` | `1`: pixelated light and shadows; `0`: smooth |
+| `CHROMA_SHADOW_PIXELS_PER_BLOCK` | `16`: higher values make smaller pixels |
+| `CHROMA_NORMAL_MAPS` | `1`: texture relief on; `0`: off |
+| `CHROMA_NORMAL_STRENGTH` | `1.0`: relief strength; `0.5`: subtler |
+| `CHROMA_GLOW_ENABLED` | `1`: lamp halo on; `0`: off |
+| `CHROMA_GLOW_RADIUS` | `0.35`: halo radius in blocks |
+| `CHROMA_GLOW_STRENGTH` | `0.04`: halo brightness |
+| `CHROMA_GLOW_SOFTNESS` | `1.0`: default soft edge; `0.5`: sharper; `2.0`: softer |
+| `CHROMA_FLICKER_AMOUNT` | `0.12`: hemisphere flicker; `0.0`: off |
+| `CHROMA_FLICKER_SPEED` | `0.9`: higher values make flicker faster |
 
-For more FPS, try `CHROMA_SHADOW_QUALITY 1`; to disable shadow calculations, set `CHROMA_SHADOWS_ENABLED 0`. Save and press **F3+T**. Quality sets the map size and sample count automatically. FPS gains depend on the scene; switching shadows off does not release their reserved video memory.
-
-Chroma's extra fog is off by default (`FOG_DENSITY 0.0` in `assets/chroma/shaders/post/shade.fsh`). Disable hemisphere flicker with `CHROMA_FLICKER_AMOUNT 0.0` in `assets/chroma/shaders/include/flicker.glsl`.
+For more FPS, try `CHROMA_SHADOW_QUALITY 1` or turn shadows off with `CHROMA_SHADOWS_ENABLED 0`.
 
 ## Normal maps (experimental)
 
-Normal maps give textures relief under **Chroma lamps**. The pack includes maps generated from the colours of **1329 opaque and cutout block and block-entity textures**. **110 textures with partial transparency**, including glass, and downloaded player-head skins keep their previous appearance. Relief does not change block geometry or cast extra shadows.
-
-Edit `assets/chroma/shaders/include/normal_config.glsl`, then press **F3+T**:
-
-| Setting | Effect |
-| --- | --- |
-| `CHROMA_NORMAL_MAPS` | `1`: on (default); `0`: off |
-| `CHROMA_NORMAL_STRENGTH` | `1.0`: normal relief; `0.5`: subtler; `0.0`: flat |
+Normal maps add texture relief under **Chroma lamps**. They are included for vanilla opaque and cutout block textures; partially transparent textures and downloaded player-head skins retain their usual appearance. Relief does not change block shapes.
 
 ### Your own textures and models
 
@@ -122,5 +121,6 @@ Stop with `/function chroma_flashlight:stop` before removing the datapack. It cr
 
 - Up to **128 simultaneously rendered lamps**. Sources must be loaded and rendered; many overlapping lights can reduce FPS.
 - Objects you have not looked at may cast incorrect shadows. Look at an area after moving or changing blocks there. Press **F3+T** after changing worlds or dimensions.
+- The halo may be hidden when glass, water or an in-world interface covers the lamp centre.
 - Chroma uses the surface's existing colour and texture; its brightness also depends on vanilla lighting.
 - Everything is **visual**: block-light levels and mob spawning do not change.

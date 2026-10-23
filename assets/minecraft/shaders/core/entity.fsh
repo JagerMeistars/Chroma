@@ -199,23 +199,20 @@ void main() {
     #if CHROMA_STATIC_WORLD || CHROMA_ENTITY_SHADOWS == 1 || !CHROMA_TRANSPARENT_DEPTH_MASK
 
     #if !defined(OIT)
-    // The opaque framebuffer alpha carries only a material normal. RGB, depth,
-    // vanilla lighting and cutout coverage have already been resolved above.
-    // Improved Transparency routes blended world draws through OIT. Native
-    // cutout alpha after the discard is coverage, not an additional data code.
-    if (ProjMat[2][3] != 0.0)
-        fragColor.a = chromaMaterial.mapped ? chromaMaterialAlpha(chromaMaterial,
-            chromaMaterialEye, texCoord0, transpose(mat3(ModelViewMat))) : 1.0;
+    // Item/entity cutout and blended pipelines can share shader defines.
+    // Leave native materials and fractional coverage untouched; only fully
+    // covered prepared texels may carry a material normal here.
+    if (ProjMat[2][3] != 0.0 && chromaMaterial.mapped && fragColor.a >= 254.5 / 255.0)
+        fragColor.a = chromaMaterialAlpha(chromaMaterial,
+            chromaMaterialEye, texCoord0, transpose(mat3(ModelViewMat)));
     #endif
     #endif
 
     #if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS != 1 && CHROMA_TRANSPARENT_DEPTH_MASK && !defined(OIT)
-    // Improved Transparency ON routes blended entities through OIT. Only the
-    // remaining opaque/cutout draw may use unused framebuffer alpha metadata.
-    // Preserve native cutout, RGB, depth and all marker packets above. Mode 0/2
-    // excludes this entity-shader group from persistent caster acquisition;
-    // nonzero metadata still lets these surfaces receive Chroma lighting.
-    fragColor.a = 1.0 / 255.0;
+    // Mode 0/2 excludes covered entity surfaces from caster acquisition.
+    // Fractional coverage still belongs to native blending, including fades.
+    if (fragColor.a >= 254.5 / 255.0)
+        fragColor.a = 1.0 / 255.0;
     #endif
     #endif
 }

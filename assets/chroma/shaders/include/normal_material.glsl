@@ -17,31 +17,25 @@ bool chromaReadNormalTile(sampler2D atlas, ivec2 origin, out int code, out float
     coverage = 0.0;
     ivec2 size = textureSize(atlas, 0);
     if (any(lessThan(origin, ivec2(0))) || any(greaterThanEqual(origin + 3, size))) return false;
-    vec3 reference = texelFetch(atlas, origin, 0).rgb;
+    vec4 first = texelFetch(atlas, origin, 0);
+    vec3 reference = first.rgb;
     for (int quad = 0; quad < 4; ++quad) {
         ivec2 base = origin + ivec2(quad % 2, quad / 2) * 2;
-        int hole = 0;
-        float values[4];
-        float largest = 0.0, smallest = 256.0, sum = 0.0;
-        for (int corner = 0; corner < 4; ++corner) {
-            vec4 pixel = texelFetch(atlas, base + ivec2(corner % 2, corner / 2), 0);
-            if (any(greaterThan(abs(pixel.rgb - reference), vec3(0.5 / 255.0)))) return false;
-            float a = floor(pixel.a * 255.0 + 0.5);
-            values[corner] = a;
-            largest = max(largest, a);
-            sum += a;
-            if (a < smallest) { smallest = a; hole = corner; }
-        }
-        // Animation interpolation blends alpha too in 26.3. Two fully covered
-        // corners and a complementary pair still have exactly three texels'
-        // coverage, so choose the nearer frame without disabling animation.
-        // Ignore near-transparent native overlays (pumpkin blur, destruction).
-        // Prepared animation texels this faint are below native cutout anyway.
-        if (largest < 6.0 || abs(sum - 3.0 * largest) > 2.0) return false;
-        int fullCorners = 0;
-        for (int corner = 0; corner < 4; ++corner)
-            if (values[corner] >= largest - 1.0) ++fullCorners;
-        if (fullCorners < 2) return false;
+        vec4 p0 = quad == 0 ? first : texelFetch(atlas, base, 0);
+        vec4 p1 = texelFetch(atlas, base + ivec2(1, 0), 0);
+        vec4 p2 = texelFetch(atlas, base + ivec2(0, 1), 0);
+        vec4 p3 = texelFetch(atlas, base + ivec2(1, 1), 0);
+        vec3 error = max(max(abs(p0.rgb - reference), abs(p1.rgb - reference)),
+                         max(abs(p2.rgb - reference), abs(p3.rgb - reference)));
+        if (any(greaterThan(error, vec3(0.5 / 255.0)))) return false;
+        vec4 a = floor(vec4(p0.a, p1.a, p2.a, p3.a) * 255.0 + 0.5);
+        float largest = max(max(a.x, a.y), max(a.z, a.w));
+        float smallest = min(min(a.x, a.y), min(a.z, a.w));
+        // Preserve the original first-minimum rule, including animation ties.
+        int hole = a.x == smallest ? 0 : a.y == smallest ? 1 : a.z == smallest ? 2 : 3;
+        if (largest < 6.0 || abs(dot(a, vec4(1.0)) - 3.0 * largest) > 2.0) return false;
+        vec4 full = step(vec4(largest - 1.0), a);
+        if (dot(full, vec4(1.0)) < 2.0) return false;
         if (quad == 0) coverage = largest / 255.0;
         else if (abs(largest - coverage * 255.0) > 1.0) return false;
         code |= hole << (quad * 2);
@@ -105,7 +99,7 @@ ChromaMaterial chromaSampleMaterial(sampler2D atlas, vec2 uv, vec4 nativeSample,
         // Subpixel relief fades toward the geometric normal instead of aliasing
         // between unrelated source texels at long distances or grazing angles.
         float detail = 1.0 - smoothstep(4.0, 16.0, sqrt(max(dot(dx, dx), dot(dy, dy))));
-        material.tangentNormal = normalize(vec3((vec2(code % 15, code / 15) - 7.0) / 7.0 * detail, 1.0));
+        material.tangentNormal = vec3((vec2(code % 15, code / 15) - 7.0) / 7.0 * detail, detail > 0.0 ? 1.0 : 0.0);
         // Below mip 1 the texture alpha is metadata. Above it the mean alpha
         // is real cutout coverage scaled by 191/255.
         material.color.a = minified ? chromaMipCoverage(atlas, uv, lod, coverage) : coverage;
@@ -171,6 +165,10 @@ float chromaMaterialAlpha(ChromaMaterial material, vec3 eyePosition, vec2 uv, ma
     if (material.mapped) {
         vec3 dpdx = dFdx(eyePosition), dpdy = dFdy(eyePosition);
         vec2 duvdx = dFdx(uv), duvdy = dFdy(uv);
+        // Evaluate derivatives before the per-fragment neutral-normal exit.
+        // Coverage/mapped status remains intact for cutouts and mip recovery.
+        // z=0 is an internal sentinel only when the existing fade is zero.
+        if (material.tangentNormal.z == 0.0) return 1.0;
         float determinant = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
         vec3 crossed = cross(dpdx, dpdy);
         if (abs(determinant) > 1e-16 && dot(crossed, crossed) > 1e-20) {

@@ -7,7 +7,7 @@
 #define CHROMA_VOX_CELL 0.25
 #define CHROMA_VOX_PUSH (CHROMA_VOX_CELL * 0.08)
 #define CHROMA_VOX_SURFACES 4
-#define CHROMA_VOX_META_MAGIC 0xC70A0256u
+#define CHROMA_VOX_META_MAGIC 0xC70B0256u
 #ifndef CHROMA_VOX_UPDATE_PHASES
 #define CHROMA_VOX_UPDATE_PHASES (CHROMA_VOX_CELLS * 2)
 #endif
@@ -69,12 +69,23 @@ ivec3 chromaVoxStorage(ivec3 voxel) {
     return voxel & (CHROMA_VOX_N - 1);
 #endif
 }
+// Physical order: X, upper five Y bits, Z, then the update phase.
+// World-coordinate wrap by 256 does not change (Y xor (Z >> 3)) & 7.
+ivec3 chromaVoxWrappedFromTexel(ivec2 pixel) {
+    int index = (pixel.x + 4096 * pixel.y) >> 2;
+    int x = index & 255;
+    int yHigh = (index >> 8) & 31;
+    int z = (index >> 13) & 255;
+    int phase = index >> 21;
+    return ivec3(x, (yHigh << 3) | (phase ^ ((z >> 3) & 7)), z);
+}
 ivec2 chromaVoxTexel(ivec3 voxel) {
     ivec3 v = chromaVoxStorage(voxel);
 #if CHROMA_STATIC_WORLD
     return ivec2(v.x / 16 + (chromaVoxDims().x / 16) * v.z, v.y);
 #else
-    int index = CHROMA_VOX_SURFACES * (v.x + CHROMA_VOX_N * (v.y + CHROMA_VOX_N * v.z));
+    int phase = (v.y ^ (v.z >> 3)) & 7;
+    int index = CHROMA_VOX_SURFACES * (v.x + 256 * ((v.y >> 3) + 32 * (v.z + 256 * phase)));
     return ivec2(index & 4095, index >> 12);
 #endif
 }

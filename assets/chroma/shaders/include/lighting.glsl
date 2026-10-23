@@ -1,6 +1,6 @@
+#include <chroma:settings.glsl>
 // Current-frame compact light list. Indices are assigned automatically on GPU.
 #define CHROMA_LAMPS 128
-#define CHROMA_RADIUS_GAIN 1.0
 
 // Each RGBA8 texel stores one uint32 or the raw bits of one float32.
 // Camera section: +0 valid, +1..16 projection, +17..32 inverse projection,

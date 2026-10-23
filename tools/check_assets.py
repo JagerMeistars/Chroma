@@ -34,17 +34,23 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',type=Path,default=ROOT)
     parser.add_argument('--client-jar',type=Path,default=Path(os.environ['APPDATA'])/'PrismLauncher/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar')
+    parser.add_argument('--sodium-jar',type=Path,help='Installed Sodium JAR supplying adapter includes')
     parser.add_argument('--source',type=Path)
     parser.add_argument('--source-manifest',type=Path)
     parser.add_argument('--report',type=Path)
     args=parser.parse_args();root=args.root.resolve()
     shadow_build=(root/'assets/chroma/shaders/include/shadow_config.glsl').is_file()
     jar=zipfile.ZipFile(args.client_jar);vanilla=set(jar.namelist());errors=[];references=0
+    sodium=None;sodium_resources=set();sodium_root=root/'assets/sodium'
+    if sodium_root.exists():
+        from check_native import find_sodium_jar
+        sodium=zipfile.ZipFile(find_sodium_jar(Path(os.environ['APPDATA'])/'PrismLauncher',args.sodium_jar))
+        sodium_resources=set(sodium.namelist())
     def resource(identifier,folder,ext):
         nonlocal references
         ns,name=identifier.split(':',1) if ':' in identifier else ('minecraft',identifier)
         rel=f'assets/{ns}/{folder}/{name}{ext}';references+=1
-        if not (root/rel).is_file() and rel not in vanilla:errors.append(f'Missing resource: {rel}')
+        if not (root/rel).is_file() and rel not in vanilla and rel not in sodium_resources:errors.append(f'Missing resource: {rel}')
         return rel
     def model_refs(value):
         if isinstance(value,dict):
@@ -71,7 +77,12 @@ def main():
                 for inc in re.findall(r'#include\s*<([^>]+)>',source):resource(inc,'shaders/include','')
         except (ValueError,KeyError,TypeError) as e:errors.append(f'{path.relative_to(root)}: {e}')
     namespaces={p.name for p in (root/'assets').iterdir()}
-    if namespaces!={'chroma','minecraft'}:errors.append(f'Unexpected asset namespaces: {namespaces}')
+    expected_namespaces={'chroma','minecraft'}|({'sodium'} if sodium_root.exists() else set())
+    if namespaces!=expected_namespaces:errors.append(f'Unexpected asset namespaces: {namespaces}')
+    if sodium_root.exists():
+        sodium_files={p.relative_to(sodium_root).as_posix() for p in sodium_root.rglob('*') if p.is_file()}
+        expected_sodium={f'shaders/blocks/block_layer_opaque.{stage}' for stage in ('vsh','fsh')}
+        if sodium_files!=expected_sodium:errors.append(f'Unexpected Sodium overrides: {sodium_files^expected_sodium}')
     mcfiles={p.relative_to(root/'assets/minecraft').as_posix() for p in (root/'assets/minecraft').rglob('*') if p.is_file()}
     allowed={'post_effect/end_of_frame.json','atlases/items.json'}|{f'shaders/core/{name}.{stage}' for name in ('item','entity','position_color') for stage in ('vsh','fsh')}
     if shadow_build: allowed.update(('shaders/core/integrate_depth.fsh', 'shaders/core/position_tex_color.fsh', 'shaders/core/particle.fsh', 'shaders/core/oit_composite.fsh', 'shaders/core/rendertype_lines.vsh', 'shaders/core/rendertype_lines.fsh'))
@@ -151,8 +162,10 @@ def main():
                 target=inp['target']
                 if target not in targets and target!='minecraft:main':errors.append(f'Undefined input target: {target}')
                 if target==output:errors.append(f'Read/write feedback in pass {index}: {target}')
-                # This renderer is entirely frame-local, even if debug readback
-                # makes a target persistent. Never read an earlier frame by accident.
+                # Only the explicit shadow/voxel history inputs may be read
+                # before this frame writes them. Persistent phase targets are
+                # still scheduled before consumers; persistence alone is not
+                # permission to read arbitrary stale frame data.
                 history = shadow_build and target in ('voxel_history','voxel_meta_history','shadow_map_history','shadow_meta_history') and targets[target].get('persistent')
                 if target not in available and not history:errors.append(f'Target read before this frame writes it: {target}')
             elif 'location' in inp:
@@ -163,6 +176,7 @@ def main():
         available.add(output)
     for target,expected in {'catalog':[2048,1],'counts':[64,1],'indices':[128,1],'colorcache':[128,1],'matdec':[2176,1],'tile_masks':[512,72],'swap':'framebuffer'}.items():
         if dimensions.get(target)!=expected:errors.append(f'Transport target dimension mismatch: {target}={dimensions.get(target)}, expected {expected}')
+    if 'light_bounds' in targets and dimensions.get('light_bounds')!=[128,1]:errors.append('Light bounds target must have one entry per source (128x1)')
     if not chain['passes'] or chain['passes'][-1]['output']!='minecraft:main':errors.append('Final pass does not write the main target')
     atlas=json.loads((root/'assets/minecraft/atlases/items.json').read_text(encoding='utf-8')).get('sources',[])
     expected_sprites={f'chroma:custom/{name}{suffix}' for name in FAMILIES for suffix in ('','_header')}
@@ -232,11 +246,13 @@ def main():
     result={'json_files':sum(p.suffix=='.json' for p in files),'references_checked':references,'post_passes':len(chain['passes']),
             'post_target_dimensions':dimensions,'minecraft_overrides':len(mcfiles),'primary_shapes':len(FAMILIES),
             'marker_item_aliases':marker_count,'item_atlas_sources':len(atlas),'manual_source_ids':False,
-            'source_unchanged':source_unchanged,'errors':errors,'client_gameplay':False,'fps_measured':False}
+            'source_unchanged':source_unchanged,'sodium_includes_jar':sodium.filename if sodium else None,
+            'errors':errors,'client_gameplay':False,'fps_measured':False}
     report=args.report or root/'audit/assets.json'
     report.parent.mkdir(parents=True,exist_ok=True)
     report.write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(result,indent=2));jar.close()
+    if sodium:sodium.close()
     if errors:raise SystemExit(1)
 
 if __name__=='__main__':main()

@@ -117,7 +117,8 @@ def main():
     if (args.static_volume or args.debug) and not args.output:
         parser.error('Experimental builds require --output; the release is Chroma-26.3.zip')
     volume = json.loads((args.static_volume/'metadata.json').read_text()) if args.static_volume else None
-    chain = configure(json.loads((ROOT/CHAIN).read_text()), volume)
+    source_chain = json.loads((ROOT/CHAIN).read_text())
+    chain = configure(source_chain, volume) if volume or args.prepare_dynamic else source_chain
     if args.prepare_dynamic:
         if volume: parser.error('--prepare-dynamic cannot be used with a static volume')
         (ROOT/CHAIN).write_text(json.dumps(chain, indent=2)+'\n', encoding='utf-8')

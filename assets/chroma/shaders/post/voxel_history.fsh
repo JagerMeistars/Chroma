@@ -12,8 +12,7 @@ void main() {
     if (cameraValid == 0) discard;
     ivec2 p = ivec2(gl_FragCoord.xy);
     int index = (p.x + 4096 * p.y) >> 2;
-    ivec3 wrapped = ivec3(index % CHROMA_VOX_N,
-        (index / CHROMA_VOX_N) % CHROMA_VOX_N, index / (CHROMA_VOX_N * CHROMA_VOX_N));
+    ivec3 wrapped = chromaVoxWrappedFromTexel(p);
     ivec3 origin = chromaVoxOrigin();
     ivec3 voxel = origin + ((wrapped - origin) & (CHROMA_VOX_N - 1));
     bool retained = historyValid != 0 && chromaVoxContains(voxel, previousOrigin);

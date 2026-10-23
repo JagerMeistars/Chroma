@@ -1,7 +1,6 @@
 #ifndef CHROMA_FLICKER_GLSL
 #define CHROMA_FLICKER_GLSL
-#define CHROMA_FLICKER_AMOUNT 0.12
-#define CHROMA_FLICKER_SPEED 0.9
+#include <chroma:settings.glsl>
 // Colour gives a stable phase without assigning an identity to the source.
 // Compaction order, camera movement and unrelated entities cannot change it.
 float chromaSourceFlicker(int shape, vec3 colour, float time) {

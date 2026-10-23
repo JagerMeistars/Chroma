@@ -80,6 +80,8 @@ void main() {
         fragColor = chromaVoxEncode(0u);
         return;
     }
+    // Depth and payload must refresh together, after this frame's voxel LOD.
+#if CHROMA_STATIC_WORLD || CHROMA_SHADOW_REFRESH_FRAMES != 1
     bool unchanged = true;
     for (int field = 0; field < 8; ++field) {
         uint current = chromaVoxDecode(texelFetch(CurrentShadowMetaSampler, ivec2(base + field, 0), 0));
@@ -87,9 +89,10 @@ void main() {
         unchanged = unchanged && current == previous;
     }
     uint frame = chromaVoxDecode(texelFetch(VoxelMetaSampler, ivec2(4, 0), 0));
-    unchanged = unchanged && ((frame + uint(lamp)) & 7u) != 0u;
+    unchanged = unchanged && ((frame + uint(lamp)) % uint(CHROMA_SHADOW_REFRESH_FRAMES)) != 0u;
     if (unchanged) discard;
 
+#endif
     float depth = uintBitsToFloat(chromaVoxDecode(texelFetch(ShadowSampler, pixel, 0)));
     float radius = uintBitsToFloat(chromaVoxDecode(texelFetch(CurrentShadowMetaSampler, ivec2(base + 6, 0), 0)));
     if (depth <= 0.0001 || depth >= radius - 0.001) {

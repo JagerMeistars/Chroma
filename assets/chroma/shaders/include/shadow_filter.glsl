@@ -4,6 +4,9 @@
 #if CHROMA_STATIC_WORLD
 #include <chroma:shadow_filter_static.glsl>
 #else
+#if CHROMA_ADAPTIVE_SHADOWS && CHROMA_SHADOW_SAMPLES == 16
+float chromaShadowDetail = 1.0;
+#endif
 uniform sampler2D ShadowSampler;
 uniform sampler2D SurfaceSampler;
 uniform sampler2D VoxelSampler;
@@ -213,6 +216,8 @@ float chromaPcssHardShadow(int lamp, vec3 receiver, vec3 normal, vec3 light,
     float distance = length(delta);
     if (distance <= 0.00001) return 1.0;
     vec3 axis = delta / distance;
+    // The start-cell result is independent of guide-plane discovery.
+    if (chromaAreaCellBlocked(chromaVoxOf(light), light, axis, distance - 0.0001)) return 0.0;
     vec3 tangent, bitangent;
     chromaPcssBasis(axis, tangent, bitangent);
     float searchAngle = min(sourceRadius / max(0.5, distance * 0.2), CHROMA_PCSS_MAX_SLOPE);
@@ -221,11 +226,11 @@ float chromaPcssHardShadow(int lamp, vec3 receiver, vec3 normal, vec3 light,
     vec4 seedPlanes[4];
     uint seedSurfaces[4];
     // At most seventeen depth seeds and four distinct finite guide planes.
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 9 && seedCount < 4; ++i) {
         vec2 offset = CHROMA_SEARCH_DISK[i] * searchAngle;
         vec3 ray = normalize(axis + tangent * offset.x + bitangent * offset.y);
         ivec2 middle = ivec2(floor(chromaShadowUV(ray) * float(CHROMA_SHADOW_RES)));
-        for (int j = 0; j < (i == 0 ? 9 : 1); ++j) {
+        for (int j = 0; j < (i == 0 ? 9 : 1) && seedCount < 4; ++j) {
             ivec2 pixel = middle + (i == 0 ? CHROMA_BLOCKER_OFFSETS[j] : ivec2(0));
             float depth = chromaShadowDepth(lamp, pixel);
             if (!(depth > 0.0001) || depth >= lightRadius - 0.001
@@ -370,13 +375,24 @@ float chromaShadow(int lamp, vec3 receiver, vec3 normal, vec3 light, float light
     }
     vec2 visible = vec2(0.0);
     for (int i = 0; i < CHROMA_SHADOW_SAMPLES; ++i) {
-        vec2 disk = CHROMA_SOURCE_DISK[i];
+        float sampleWeight = 1.0;
+        int sampleIndex = i;
+#if CHROMA_ADAPTIVE_SHADOWS && CHROMA_SHADOW_SAMPLES == 16
+        // Even entries cover the full emitter disk. Fade in the odd entries,
+        // normalizing supported weights; never collapse to the inner disk.
+        if (chromaShadowDetail < 1.0) {
+            if (i >= 8 && chromaShadowDetail <= 0.0) break;
+            sampleIndex = i < 8 ? i * 2 : (i - 8) * 2 + 1;
+            sampleWeight = i < 8 ? 1.0 : chromaShadowDetail;
+        }
+#endif
+        vec2 disk = CHROMA_SOURCE_DISK[sampleIndex];
         vec3 sourceOffset = (tangent * disk.x + bitangent * disk.y) * sourceRadius;
         // Only the physical emitter disk's front hemisphere contributes to an
         // opaque receiver. Normalize by supported comparison weights below.
         if (dot(light + sourceOffset - receiver, normal) <= 0.0) continue;
         vec3 direction = normalize(axis + (tangent * disk.x + bitangent * disk.y) * filterAngle);
-        visible += chromaPcssCompare(lamp, direction, normal, plane, normalBias, lightRadius);
+        visible += sampleWeight * chromaPcssCompare(lamp, direction, normal, plane, normalBias, lightRadius);
     }
     return mix(hardVisibility, chromaPcssVisibility(visible), softWeight);
 }

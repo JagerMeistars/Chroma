@@ -52,6 +52,7 @@ public class CheckNormalMaterials {
         if (!Float.isFinite(a) || Math.abs(a-b)>tolerance) throw new AssertionError(context+": "+a+" != "+b);
     }
     public static void main(String[] args) throws Exception {
+        boolean normalsEnabled=args.length<2 || args[1].equals("1");
         if (!glfwInit()) throw new IllegalStateException("GLFW init failed");
         glfwWindowHint(GLFW_VISIBLE,GLFW_FALSE); glfwWindowHint(GLFW_FOCUSED,GLFW_FALSE);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
@@ -93,6 +94,7 @@ public class CheckNormalMaterials {
             for(int rotation=0;rotation<3;rotation++) {
                 float x=(code%15-7)/7f,y=(code/15-7)/7f;
                 if(rotation==1){float old=x;x=-y;y=old;} else if(rotation==2)x=-x;
+                if(!normalsEnabled){x=0;y=0;}
                 float length=(float)Math.sqrt(x*x+y*y+1);
                 float[] normal=draw(p,1,rotation);
                 for(int i=0;i<normal.length;i+=4){
@@ -127,6 +129,7 @@ public class CheckNormalMaterials {
             glUniform2f(glGetUniformLocation(p,"sampleOffset"),(4+px)/16f,(4+py)/16f);
             float[] color=draw(p,0,0), normal=draw(p,1,0);
             float x=(code%15-7)/7f,y=(code/15-7)/7f;
+            if(!normalsEnabled){x=0;y=0;}
             float length=(float)Math.sqrt(x*x+y*y+1);
             for(int i=0;i<color.length;i+=4) {
                 close(color[i],24f/255,1e-5f,"offset red");close(color[i+1],112f/255,1e-5f,"offset green");
@@ -166,7 +169,7 @@ public class CheckNormalMaterials {
             for(int y=0;y<2;y++)for(int x=0;x<2;x++)
                 close(values[(y*16+x)*4+3],1,1e-5f,"sampler-clamped minified coverage mode="+mode);
         }
-        System.out.println("NORMAL_GPU_PASS cases="+checked+" atlas_phase_cases="+phaseCases+" coverage_fallback_cases="+coverageFallbacks+" all_pixels=16x16 RGB=exact coverage=exact UV=normal,rotated,mirrored animation=pass minified_sampler_clamp=pass GPU="+glGetString(GL_RENDERER)+" gameplay=false");
+        System.out.println("NORMAL_GPU_PASS enabled="+normalsEnabled+" cases="+checked+" atlas_phase_cases="+phaseCases+" coverage_fallback_cases="+coverageFallbacks+" all_pixels=16x16 RGB=exact coverage=exact UV=normal,rotated,mirrored animation=pass minified_sampler_clamp=pass GPU="+glGetString(GL_RENDERER)+" gameplay=false");
         glfwDestroyWindow(window);glfwTerminate();
     }
 }

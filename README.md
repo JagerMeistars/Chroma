@@ -6,9 +6,9 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 ### Start
 
-1. Download `Chroma-26.3.zip`: [stable](https://github.com/JagerMeistars/Chroma/releases/latest) or [experimental with normal maps](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
+1. Download `Chroma-26.3.zip`: [stable](https://github.com/JagerMeistars/Chroma/releases/latest) or [experimental](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
 2. Put the ZIP in `minecraft/resourcepacks`, enable it, and turn on **Improved Transparency**.
-3. Follow the [English guide](docs/README.en.md) to spawn and configure lights.
+3. Follow the [English guide](docs/README.en.md) to spawn lights. In the experimental version, all settings are in [`settings.glsl`](assets/chroma/shaders/include/settings.glsl); save changes and press **F3+T**.
 
 ### Guides
 
@@ -21,9 +21,9 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 
 ### Начать
 
-1. Скачай `Chroma-26.3.zip`: [стабильную версию](https://github.com/JagerMeistars/Chroma/releases/latest) или [экспериментальную с картами нормалей](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
+1. Скачай `Chroma-26.3.zip`: [стабильную версию](https://github.com/JagerMeistars/Chroma/releases/latest) или [экспериментальную](https://github.com/JagerMeistars/Chroma/releases/tag/26.3-experimental).
 2. Положи ZIP в `minecraft/resourcepacks`, включи его и **Improved Transparency**.
-3. Инструкция по [созданию и настройке источников](docs/README.ru.md).
+3. Создавай источники по [русскому руководству](docs/README.ru.md). В экспериментальной версии все настройки находятся в [`settings.glsl`](assets/chroma/shaders/include/settings.glsl); после изменений нажми **F3+T**.
 
 ### Руководства
 
@@ -35,3 +35,5 @@ Coloured light and world shadows for **Minecraft Java 26.3**. A vanilla resource
 [MIT License](LICENSE) · © 2026 JagerMeistars
 
 Based on Chroma from RPDREVO. Research references: [JNNGL/VanillaDI](https://github.com/JNNGL/VanillaDI) and [JNNGL/vanilla-shaderpack](https://github.com/JNNGL/vanilla-shaderpack); normal-map code is independently implemented. Minecraft-derived assets retain their original rights.
+
+Sodium adapter: [included license](sodium-adapter-licenses/LICENSE.md).

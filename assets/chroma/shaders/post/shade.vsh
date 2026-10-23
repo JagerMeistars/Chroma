@@ -11,6 +11,7 @@ layout(location = 6) flat out mat4 cameraProj;
 layout(location = 10) flat out vec3 cameraDown;
 layout(location = 11) flat out int autoLastAddress;
 layout(location = 12) flat out mat3 cameraInvRot;
+layout(location = 15) flat out vec3 cameraRayOrigin;
 
 void main() {
     autoLastAddress = int(chromaMdBits(MatDecSampler, 43));
@@ -22,8 +23,13 @@ void main() {
     cameraProj = mat4(0.0);
     cameraDown = vec3(0.0, -1.0, 0.0);
     cameraInvRot = mat3(1.0);
+    cameraRayOrigin = vec3(0.0);
     if (cameraValid != 0) {
         cameraInvProj = chromaMdInvProj(MatDecSampler, 0);
+        // View bobbing/hurt transforms include translation inside ProjMat.
+        // Recover the optical centre in the same eye frame as the lamp records.
+        vec4 originH = cameraInvProj * vec4(0.0, 0.0, 1.0, 0.0);
+        cameraRayOrigin = originH.xyz / originH.w;
         for (int i = 0; i < 16; i++)
             cameraProj[i / 4][i % 4] = chromaMdFloat(MatDecSampler, 1 + i);
         cameraDown = normalize(chromaMdRot(MatDecSampler, 0) * vec3(0.0, -1.0, 0.0));

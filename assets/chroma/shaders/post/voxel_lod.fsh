@@ -46,10 +46,9 @@ void main() {
             bool occupied = false;
             for (int child = 0; child < 8; ++child) {
                 ivec3 v = first + ivec3(i * 2 + (child & 1), (child >> 1) & 1, child >> 2);
-                int index = v.x + 256 * (v.y + 256 * v.z);
-                int record = index * 4;
+                ivec2 record = chromaVoxSurfaceTexel(v, 0);
                 for (int slot = 0; slot < 4; ++slot) {
-                    uint word = readWord(ivec2((record + slot) & 4095, (record + slot) >> 12));
+                    uint word = readWord(record + ivec2(slot, 0));
                     occupied = occupied || (word & 0x80000000u) != 0u
                         || ((word & 0x40000000u) != 0u && ((word >> 14u) & 65535u) != 0u);
                 }

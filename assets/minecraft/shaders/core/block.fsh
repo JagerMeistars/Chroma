@@ -49,10 +49,12 @@ void main() {
     fragColor = calculateFinalColor(color);
 
     #if !defined(OIT)
-    // The opaque framebuffer alpha carries only a material normal. RGB, depth,
-    // vanilla lighting and cutout coverage have already been resolved above.
-    // Improved Transparency routes blended world draws through OIT. Native
-    // cutout alpha after the discard is coverage, not an additional data code.
+    // Only solid/cutout pipelines have spare framebuffer alpha for normals.
+    // Native translucent terrain/block passes use ALPHA_CUTOUT=0.1 even
+    // without OIT; their alpha must retain the material's real coverage.
+    #ifdef ALPHA_CUTOUT
+    if (ALPHA_CUTOUT >= 0.5)
+    #endif
     if (ProjMat[2][3] != 0.0)
         fragColor.a = chromaMaterial.mapped ? chromaMaterialAlpha(chromaMaterial,
             chromaMaterialEye, texCoord0, transpose(mat3(ModelViewMat))) : 1.0;

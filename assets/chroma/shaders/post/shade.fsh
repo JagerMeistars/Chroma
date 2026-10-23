@@ -2,36 +2,19 @@
 #extension GL_ARB_separate_shader_objects : require
 #include <chroma:bits.glsl>
 
-// Reconstruct visible surfaces from depth, add the marker lights, then apply
-// depth fog. The matrix and colour caches supply lamp data.
+// Reconstruct visible surfaces from depth and add marker lights plus a local
+// source glow. The matrix and colour caches supply lamp data.
 
 // Light appearance. Marker scale.x controls radius; scale.y controls intensity.
 #define RADIUS_GAIN     CHROMA_RADIUS_GAIN
-#define INTENSITY_GAIN  70.0
-#define ENABLE_ACES       1
-#define TONE_SAT          0.6
-#define LIGHT_STRENGTH    0.3
-
-#define LOOK_CORE         4.0
-#define LOOK_FULL_LUM     3.0
-#define FALLOFF_CORE      0.15
-
-// Medium spotlight angles. Narrow and wide variants are selected per marker.
-#define SPOT_COS_INNER    0.95
-#define SPOT_COS_OUTER    0.88
-#define DOME_EDGE         0.25
-
-// Optional extra fog affects the whole scene, even without lamps. Off by default.
-#define FOG_COLOR    vec3(0.05, 0.06, 0.09)
-#define FOG_DENSITY  0.0
-#define FOG_MAX      0.85
-#define FOG_SKY      0.5
 
 #include <minecraft:globals.glsl>
 #include <chroma:lighting.glsl>
 #include <chroma:auto_read.glsl>
 #include <chroma:shadow_filter.glsl>
 #include <chroma:normal_encoding.glsl>
+#include <chroma:light_bounds.glsl>
+uniform sampler2D LightBoundsSampler;
 
 uniform sampler2D InSampler;
 uniform sampler2D InDepthSampler;
@@ -51,6 +34,7 @@ layout(location = 6) flat in mat4 cameraProj;
 layout(location = 10) flat in vec3 cameraDown;
 layout(location = 11) flat in int autoLastAddress;
 layout(location = 12) flat in mat3 cameraInvRot;
+layout(location = 15) flat in vec3 cameraRayOrigin;
 layout(location = 0) out vec4 fragColor;
 
 vec3 aces(vec3 x) {
@@ -67,13 +51,8 @@ vec3 reconstructEyePosAt(vec2 uv, float d, mat4 invProj) {
 
 #include <chroma:entity_shadow.glsl>
 
-// Camera matrices are decoded once per screen-triangle vertex. Each shaded
-// pixel visits only the sources in its tile.
-void main() {
-    vec3 albedo = texture(InSampler, texCoord).rgb;
-    vec2 suv = texCoord;
-    ivec2 ipx = ivec2(gl_FragCoord.xy);
-    ivec2 frameSize = textureSize(InSampler, 0);
+// Ignore reserved transport pixels when looking up scene colour or occlusion.
+int chromaSceneCleanY(ivec2 ipx, ivec2 frameSize) {
     int cleanY = -1;
     if (chromaAutoHeaderPixel(ipx, frameSize)) cleanY = frameSize.y - 2;
     else {
@@ -81,6 +60,20 @@ void main() {
         if (address >= 0 && address <= autoLastAddress && chromaCatalogHas(CatalogSampler, address))
             cleanY = chromaAutoOrigin(address, frameSize).y - 1;
     }
+    return cleanY;
+}
+
+#include <chroma:source_glow.glsl>
+
+
+// Camera matrices are decoded once per screen-triangle vertex. Each shaded
+// pixel visits only the sources in its tile.
+void main() {
+    vec3 albedo = texture(InSampler, texCoord).rgb;
+    vec2 suv = texCoord;
+    ivec2 ipx = ivec2(gl_FragCoord.xy);
+    ivec2 frameSize = textureSize(InSampler, 0);
+    int cleanY = chromaSceneCleanY(ipx, frameSize);
     if (cleanY >= 0) {
         albedo = texelFetch(InSampler, ivec2(ipx.x, cleanY), 0).rgb;
         suv.y = (float(cleanY) + 0.5) / float(frameSize.y);
@@ -101,15 +94,8 @@ void main() {
         return;
     }
     bool isSky = d <= 0.000001;
-    float fogDist = isSky ? 1.0e4 : 0.05 / max(d, 1.0e-7);
-    float fogF = (1.0 - exp(-fogDist * FOG_DENSITY)) * (isSky ? FOG_SKY : 1.0);
-    fogF = min(fogF, FOG_MAX);
-    if (isSky) {
-        float skyLum = dot(albedo, vec3(0.2125, 0.7154, 0.0721));
-        fogF *= 1.0 - smoothstep(0.08, 0.25, skyLum);
-    }
     if (cameraValid == 0) {
-        fragColor = vec4(mix(albedo, FOG_COLOR, fogF), 1.0);
+        fragColor = vec4(albedo, 1.0);
         return;
     }
     ivec2 tileSize = textureSize(TileSampler, 0);
@@ -124,7 +110,7 @@ void main() {
     uint mask2 = maskBytes2.r | (maskBytes2.g << 8) | (maskBytes2.b << 16) | (maskBytes2.a << 24);
     uint mask3 = maskBytes3.r | (maskBytes3.g << 8) | (maskBytes3.b << 16) | (maskBytes3.a << 24);
     if ((mask0 | mask1 | mask2 | mask3) == 0u) {
-        fragColor = vec4(mix(albedo, FOG_COLOR, fogF), 1.0);
+        fragColor = vec4(albedo, 1.0);
         return;
     }
 
@@ -146,6 +132,10 @@ void main() {
         normal = normalize(cross(dxp, dyp));
         if (dot(normal, fragPos) > 0.0) normal = -normal;
     }
+    // A ray is also available on the sky, where there is no surface receiver.
+    vec3 viewRay = normalize(reconstructEyePosAt(suv, 0.5, cameraInvProj) - cameraRayOrigin);
+    float sceneDistance = isSky ? 1.0e20 : length(fragPos - cameraRayOrigin);
+    vec3 glowRadiance = vec3(0.0);
     vec3 radiance = vec3(0.0);
     float reachLum = 0.0;
     float shadowDebug = 1.0;
@@ -178,6 +168,7 @@ void main() {
         vec3 lPos = chromaMdLampEyeOf(MatDecSampler, k);
         float lRad = max(chromaMdLampRadiusOf(MatDecSampler, k) * RADIUS_GAIN, 0.001);
         int lShape = chromaMdLampShapeOf(MatDecSampler, k);
+        float glowWeight = chromaSourceGlow(lPos, lRad, viewRay, sceneDistance);
         float surfaceWeight = 0.0;
         float unshadowedWeight = 0.0;
         float visibility = 1.0;
@@ -194,8 +185,8 @@ void main() {
                 float fall = 1.0 - smoothstep(FALLOFF_CORE, 1.0, rx);
                 if (lShape >= 1 && lShape <= 3) {
                     float cosIn = SPOT_COS_INNER, cosOut = SPOT_COS_OUTER;
-                    if (lShape == 1) { cosIn = 0.985; cosOut = 0.96; }
-                    else if (lShape == 3) { cosIn = 0.88; cosOut = 0.74; }
+                    if (lShape == 1) { cosIn = SPOT_NARROW_COS_INNER; cosOut = SPOT_NARROW_COS_OUTER; }
+                    else if (lShape == 3) { cosIn = SPOT_WIDE_COS_INNER; cosOut = SPOT_WIDE_COS_OUTER; }
                     vec3 axis = -normalize(chromaMdLampFacingOf(MatDecSampler, k));
                     fall *= smoothstep(cosOut, cosIn, dot(-L, axis));
                 } else if (lShape == 4) {
@@ -209,6 +200,11 @@ void main() {
                     // Reuse an exact colocated source; distinct positions stay independent.
                     vec4 shadowSource = vec4(lPos, lRad);
                     if (any(notEqual(shadowSource, previousShadowSource))) {
+                        #if CHROMA_ADAPTIVE_SHADOWS && !CHROMA_STATIC_WORLD && CHROMA_SHADOW_SAMPLES == 16
+                        ivec4 lightRect = chromaBoundsRect(chromaBoundsRead(LightBoundsSampler, k));
+                        vec2 span = vec2(lightRect.zw - lightRect.xy + 1) / vec2(CHROMA_TILE_DIMS);
+                        chromaShadowDetail = smoothstep(0.10, 0.30, max(span.x, span.y));
+                        #endif
                         previousVisibility = chromaShadow(k, worldReceiver,
                             worldNormal, cameraInvRot * lPos, lRad);
 #if !CHROMA_STATIC_WORLD && CHROMA_ENTITY_SHADOWS == 2 && CHROMA_TRANSPARENT_DEPTH_MASK
@@ -224,9 +220,10 @@ void main() {
 #endif
             }
         }
-        if (surfaceWeight == 0.0) continue;
+        if (surfaceWeight == 0.0 && glowWeight == 0.0) continue;
         float lInt = max(chromaMdRenderIntensity(MatDecSampler, k) * INTENSITY_GAIN, 0.0);
         vec3 lCol = texelFetch(ColorSampler, ivec2(k, 0), 0).rgb;
+        glowRadiance += lCol * (lInt * glowWeight);
         radiance += lCol * (lInt * surfaceWeight);
         // Saturate each lamp's response before applying shadow coverage. A
         // bright lamp's first visible sample must not fill the whole penumbra.
@@ -253,7 +250,8 @@ void main() {
         reach = env;
     }
     outc = mix(albedo, outc, reach);
-    outc = mix(outc, FOG_COLOR, fogF);
+    // Local emission is independent of surface lighting and never darkens it.
+    outc += max(vec3(1.0) - outc, vec3(0.0)) * (vec3(1.0) - exp(-glowRadiance));
     fragColor = vec4(outc, 1.0);
 #if CHROMA_SHADOWS_ENABLED && CHROMA_SHADOW_DEBUG
     fragColor = vec4(vec3(shadowDebug), 1.0);

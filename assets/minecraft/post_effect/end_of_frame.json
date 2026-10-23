@@ -90,6 +90,10 @@
     "vacancy_depth": {
       "width": 256,
       "height": 256
+    },
+    "light_bounds": {
+      "width": 128,
+      "height": 1
     }
   },
   "passes": [
@@ -166,7 +170,7 @@
     },
     {
       "vertex_shader": "chroma:post/shade",
-      "fragment_shader": "chroma:post/tile_masks",
+      "fragment_shader": "chroma:post/light_bounds",
       "inputs": [
         {
           "sampler_name": "MatDec",
@@ -175,6 +179,21 @@
         {
           "sampler_name": "Scene",
           "target": "minecraft:main"
+        }
+      ],
+      "output": "light_bounds"
+    },
+    {
+      "vertex_shader": "chroma:post/shade",
+      "fragment_shader": "chroma:post/tile_masks",
+      "inputs": [
+        {
+          "sampler_name": "MatDec",
+          "target": "matdec"
+        },
+        {
+          "sampler_name": "LightBounds",
+          "target": "light_bounds"
         }
       ],
       "output": "tile_masks"
@@ -228,7 +247,7 @@
       "output": "vacancy_depth"
     },
     {
-      "vertex_shader": "chroma:post/voxel_update",
+      "vertex_shader": "chroma:post/voxel_phase",
       "fragment_shader": "chroma:post/voxel_update",
       "inputs": [
         {
@@ -449,12 +468,16 @@
         {
           "sampler_name": "VoxelLod1",
           "target": "voxel_lod1"
+        },
+        {
+          "sampler_name": "LightBounds",
+          "target": "light_bounds"
         }
       ],
       "output": "swap"
     },
     {
-      "vertex_shader": "chroma:post/voxel_update",
+      "vertex_shader": "chroma:post/voxel_phase",
       "fragment_shader": "chroma:post/voxel_history",
       "inputs": [
         {

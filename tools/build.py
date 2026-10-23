@@ -17,13 +17,13 @@ def pack_files():
         'README.en.md', 'README.ru.md', 'examples.mcfunction', 'examples-128.mcfunction'))
     files.append(ROOT / 'tools' / 'normal_maps.py')
     files.append(ROOT / 'tools' / 'normal_item_models.json')
+    files.extend(p for p in (ROOT / 'sodium-adapter-licenses').rglob('*') if p.is_file())
     return sorted(files)
 
 
 def main():
-    if (ROOT / 'assets/chroma/shaders/include/shadow_config.glsl').is_file():
-        from build_shadows import main as build_shadow
-        return build_shadow()
+    # Release exactly the checked source pack, including its post-effect chain.
+    # Legacy scene generators are opt-in tools, not part of normal packaging.
     out = ROOT / 'dist' / 'Chroma-26.3.zip'
     out.parent.mkdir(exist_ok=True)
     files = pack_files()
