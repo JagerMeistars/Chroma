@@ -26,10 +26,9 @@ void main() {
     float depth = texelFetch(InDepthSampler, p, 0).r;
     if (!(depth > 0.000001 && depth < 0.999999)) return;
     vec3 surface = eyeAt(p, depth, cameraInvProj, size);
-    vec3 side[4], normalEye, normal, supportedNormal;
-    float distanceZ[4];
+    vec3 normalEye, normal, supportedNormal;
     if (!depthNormal(p, surface, cameraInvProj, cameraRot, size,
-                     normalEye, normal, supportedNormal, side, distanceZ)) return;
+                     normalEye, normal, supportedNormal)) return;
     fragColor = chromaVoxEncode(chromaDepthNormalEncode(normal,
         dot(supportedNormal, supportedNormal) > 0.5));
 }

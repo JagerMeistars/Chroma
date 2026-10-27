@@ -7,6 +7,14 @@ import static org.lwjgl.opengl.GL33C.*;
 
 /** Compile and link the native client's translated shader variants on the GPU. */
 public class CheckDriver {
+    static void reportInfoLog(String context, String log) {
+        if (log.isBlank()) return;
+        System.out.println(context + "\n" + log);
+        // A successful link can still report undefined inputs on NVIDIA.
+        // Keep this diagnostic visible and make it a validation failure.
+        if (log.contains("warning C7050:"))
+            throw new IllegalStateException("Uninitialized shader input: " + context);
+    }
     static String normalizeBlockNames(String source) {
         // This harness translates stages independently, before Minecraft remaps
         // descriptor bindings for an entire pipeline. Auto-numbered block names
@@ -26,8 +34,10 @@ public class CheckDriver {
         int shader = glCreateShader(type);
         glShaderSource(shader, normalizeBlockNames(text));
         glCompileShader(shader);
+        String log = glGetShaderInfoLog(shader);
+        reportInfoLog("DRIVER_COMPILE_LOG stage=" + type, log);
         if (glGetShaderi(shader, GL_COMPILE_STATUS) == 0)
-            throw new IllegalStateException(glGetShaderInfoLog(shader));
+            throw new IllegalStateException(log);
         return shader;
     }
     static void checkRaster(int vertex, int expected, String name) {
@@ -74,8 +84,10 @@ public class CheckDriver {
                 int f = compile(GL_FRAGMENT_SHADER, Files.readString(fragment));
                 int p = glCreateProgram();
                 glAttachShader(p, v); glAttachShader(p, f); glLinkProgram(p);
+                String log = glGetProgramInfoLog(p);
+                reportInfoLog("DRIVER_LINK_LOG program=" + vertex.getFileName(), log);
                 if (glGetProgrami(p, GL_LINK_STATUS) == 0)
-                    throw new IllegalStateException(vertex + ": " + glGetProgramInfoLog(p));
+                    throw new IllegalStateException(vertex + ": " + log);
                 String name = vertex.getFileName().toString();
                 if (shadowPasses.contains(name)) {
                     checkRaster(v, shadowsEnabled ? 1024 : 0, name);

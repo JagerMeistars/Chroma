@@ -30,8 +30,11 @@ vec3 eyeAt(ivec2 p, float depth, mat4 inverseProjection, ivec2 size) {
 }
 
 bool depthNormal(ivec2 p, vec3 surface, mat4 inverseProjection, mat3 rotation, ivec2 size,
-                 out vec3 normalEye, out vec3 normal, out vec3 observedNormal,
-                 out vec3 side[4], out float distanceZ[4]) {
+                 out vec3 normalEye, out vec3 normal, out vec3 observedNormal) {
+    // Scratch arrays stay local: native translation turns out arrays into
+    // inout parameters, which triggers uninitialized-input warnings on NVIDIA.
+    vec3 side[4];
+    float distanceZ[4];
     ivec2 px[4] = ivec2[4](p + ivec2(-1,0), p + ivec2(1,0),
                             p + ivec2(0,-1), p + ivec2(0,1));
     for (int i = 0; i < 4; ++i) {
